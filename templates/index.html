@@ -1,0 +1,766 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Dance Mashup Studio</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<div class="header">
+  <div style="display:flex;justify-content:space-between;align-items:center">
+    <div>
+      <h1>Dance Mashup Studio</h1>
+      <div class="subtitle" data-i18n="subtitle">匯入多個舞蹈影片，自動卡拍剪輯混搭</div>
+    </div>
+    <button class="btn lang-toggle" onclick="toggleLang()" id="btnLang">EN</button>
+  </div>
+</div>
+
+<!-- Quick Generate Bar -->
+<div class="quick-bar">
+  <div class="quick-inner">
+    <div class="quick-field">
+      <label data-i18n="qg_person">人物名稱</label>
+      <input type="text" id="qgPerson" placeholder="例如: YUNA" data-i18n-placeholder="qg_person_ph">
+    </div>
+    <div class="quick-field">
+      <label data-i18n="qg_song">曲目名稱</label>
+      <input type="text" id="qgSong" placeholder="例如: Ice Cream" data-i18n-placeholder="qg_song_ph">
+    </div>
+    <button class="btn primary quick-go" onclick="quickGenerate()" id="btnQuickGen" data-i18n="qg_btn">一鍵生成</button>
+  </div>
+</div>
+
+<div class="main">
+  <!-- LEFT: Video list -->
+  <div class="panel left">
+    <div class="panel-title" data-i18n="video_list">影片列表</div>
+    <div class="video-list" id="videoList">
+      <div style="padding:24px;text-align:center;color:var(--fg2)" data-i18n="no_videos">
+        尚無影片。請上傳或搜尋新增。
+      </div>
+    </div>
+    <div class="btn-row">
+      <label class="btn" style="margin:0">
+        <input type="file" accept="video/*" multiple hidden id="fileInput">
+        <span data-i18n="upload">+ 上傳</span>
+      </label>
+      <button class="btn" onclick="openSearchModal()" data-i18n="search_online">線上搜尋</button>
+      <button class="btn danger" onclick="clearAll()" data-i18n="clear_all">全部清除</button>
+    </div>
+  </div>
+
+  <!-- RIGHT: Settings -->
+  <div class="panel right">
+    <div class="panel-title" data-i18n="settings">設定</div>
+
+    <!-- Reference face -->
+    <div class="setting-group">
+      <label data-i18n="ref_face">參考人臉（過濾影片）</label>
+      <div class="inline-row">
+        <input type="text" id="faceName" placeholder="人物名稱..." data-i18n-placeholder="face_name_ph">
+        <button class="btn" onclick="searchFace()" id="btnFaceSearch" data-i18n="search">搜尋</button>
+      </div>
+      <div style="margin-top:4px;display:flex;gap:4px;flex-wrap:wrap">
+        <label class="btn" style="display:inline-block;font-size:0.8rem;padding:4px 10px">
+          <input type="file" accept="image/*" hidden id="faceFileInput">
+          <span data-i18n="browse_local">瀏覽本機</span>
+        </label>
+        <button class="btn" style="font-size:0.8rem;padding:4px 10px" onclick="detectFacesFromVideos()" data-i18n="detect_from_video">從影片偵測</button>
+        <button class="btn" style="font-size:0.8rem;padding:4px 10px" onclick="clearFace()" data-i18n="clear">清除</button>
+      </div>
+      <div class="face-status" id="faceStatus" data-i18n="face_not_set">未設定（不過濾）</div>
+    </div>
+
+    <div class="separator"></div>
+
+    <!-- Audio source -->
+    <div class="setting-group">
+      <label data-i18n="audio_source">音訊來源</label>
+      <select id="audioSource"></select>
+    </div>
+    <div class="setting-group">
+      <label data-i18n="search_song">搜尋歌曲音訊</label>
+      <div class="inline-row">
+        <input type="text" id="songQuery" placeholder="歌曲名稱..." data-i18n-placeholder="song_name_ph">
+        <button class="btn" onclick="searchAudio()" id="btnAudioSearch" data-i18n="download">下載</button>
+      </div>
+      <label class="btn" style="display:inline-block;font-size:0.8rem;padding:4px 10px;margin-top:4px">
+        <input type="file" accept="audio/*" hidden id="audioFileInput">
+        <span data-i18n="browse_local_audio">瀏覽本機音訊</span>
+      </label>
+      <div class="face-status" id="audioStatus"></div>
+    </div>
+
+    <div class="separator"></div>
+
+    <!-- Parameters -->
+    <div class="setting-group">
+      <label data-i18n="min_seg">最短片段（秒）</label>
+      <div class="range-row">
+        <input type="range" id="minDur" min="0.5" max="10" step="0.5" value="3.0">
+        <span class="range-val" id="minDurVal">3.0</span>
+      </div>
+    </div>
+    <div class="setting-group">
+      <label data-i18n="max_seg">最長片段（秒）</label>
+      <div class="range-row">
+        <input type="range" id="maxDur" min="1" max="20" step="0.5" value="8.0">
+        <span class="range-val" id="maxDurVal">8.0</span>
+      </div>
+    </div>
+    <div class="setting-group">
+      <label data-i18n="pose_thresh">姿勢相似度門檻</label>
+      <div class="range-row">
+        <input type="range" id="simThresh" min="0" max="1" step="0.05" value="0.3">
+        <span class="range-val" id="simThreshVal">0.30</span>
+      </div>
+    </div>
+
+    <div class="separator"></div>
+
+    <div class="setting-group">
+      <label><input type="checkbox" id="smartCrop" checked> <span data-i18n="smart_crop">智慧裁切 16:9 轉 9:16（追蹤人物）</span></label>
+    </div>
+    <div class="setting-group">
+      <label data-i18n="crossfade">淡入淡出（秒）</label>
+      <div class="range-row">
+        <input type="range" id="crossfade" min="0" max="0.5" step="0.05" value="0.2">
+        <span class="range-val" id="crossfadeVal">0.20</span>
+      </div>
+    </div>
+    <div class="setting-group">
+      <label data-i18n="output_res">輸出解析度</label>
+      <select id="resolution">
+        <option value="1080x1920">1080x1920（直式）</option>
+        <option value="720x1280">720x1280（直式）</option>
+        <option value="1920x1080">1920x1080（橫式）</option>
+        <option value="1280x720">1280x720（橫式）</option>
+      </select>
+    </div>
+  </div>
+</div>
+
+<!-- Bottom: Timeline + Progress + Controls -->
+<div class="bottom">
+  <div class="timeline-wrap">
+    <div class="panel-title" style="border:none;margin:0;padding:0 0 6px" data-i18n="timeline">轉場時間軸</div>
+    <div class="timeline-bar" id="timeline">
+      <div style="padding:10px;color:var(--fg2);font-size:0.8rem;width:100%;text-align:center" data-i18n="run_analysis">
+        執行分析以查看時間軸
+      </div>
+    </div>
+    <div class="tl-label" id="tlLabel"></div>
+  </div>
+
+  <div class="progress-wrap">
+    <div class="progress-bar"><div class="progress-fill" id="progressFill"></div></div>
+    <div class="status-text" id="statusText" data-i18n="ready">就緒</div>
+  </div>
+
+  <div class="controls">
+    <button class="btn primary" onclick="runAnalysis()" id="btnAnalyze" data-i18n="analyze">分析影片</button>
+    <button class="btn" onclick="runReplan()" id="btnReplan" disabled data-i18n="replan">重新規劃</button>
+    <button class="btn primary" onclick="runRender()" id="btnRender" disabled data-i18n="generate">產生混搭</button>
+  </div>
+
+  <div class="output-preview" id="outputPreview" style="display:none">
+    <video controls id="outputVideo"></video>
+    <div style="margin-top:8px">
+      <a id="outputDownload" class="btn primary" download data-i18n="download_output">下載成品</a>
+    </div>
+  </div>
+</div>
+
+<!-- Search Modal -->
+<div class="modal-overlay" id="searchModal">
+  <div class="modal">
+    <div class="modal-header">
+      <h2 data-i18n="search_online_videos">搜尋線上影片</h2>
+      <button class="modal-close" onclick="closeSearchModal()">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div class="inline-row">
+        <input type="text" id="searchQuery" placeholder="歌曲名稱或關鍵字..." data-i18n-placeholder="search_kw_ph" style="flex:1;padding:8px;background:#111;border:1px solid var(--border);border-radius:4px;color:var(--fg)">
+        <select id="searchPlatform" style="padding:8px;background:#111;border:1px solid var(--border);border-radius:4px;color:var(--fg)">
+          <option value="youtube">YouTube</option>
+          <option value="bilibili">Bilibili</option>
+        </select>
+        <button class="btn primary" onclick="doSearch()" id="btnSearch" data-i18n="search">搜尋</button>
+      </div>
+      <ul class="search-results" id="searchResults"></ul>
+    </div>
+    <div class="modal-footer">
+      <div class="inline-row">
+        <button class="btn primary" onclick="doDownload()" id="btnDownload" disabled data-i18n="download_selected">下載選取項目</button>
+        <button class="btn" onclick="closeSearchModal()" data-i18n="close">關閉</button>
+        <span class="face-status" id="searchStatus" style="margin-left:auto"></span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Face Picker Modal -->
+<div class="modal-overlay" id="faceModal">
+  <div class="modal">
+    <div class="modal-header">
+      <h2 data-i18n="select_face">選擇目標人物</h2>
+      <button class="modal-close" onclick="closeFaceModal()">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div class="face-status" id="faceDetectStatus" data-i18n="detecting_faces">正在從影片偵測人臉...</div>
+      <div class="face-grid" id="faceGrid"></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn" onclick="closeFaceModal()" data-i18n="cancel">取消</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ── i18n ──
+const LANG = {
+  zh: {
+    subtitle: '匯入多個舞蹈影片，自動卡拍剪輯混搭',
+    qg_person: '人物名稱', qg_song: '曲目名稱', qg_btn: '一鍵生成',
+    qg_person_ph: '例如: YUNA', qg_song_ph: '例如: Ice Cream',
+    video_list: '影片列表', no_videos: '尚無影片。請上傳或搜尋新增。',
+    upload: '+ 上傳', search_online: '線上搜尋', clear_all: '全部清除',
+    settings: '設定', ref_face: '參考人臉（過濾影片）',
+    face_name_ph: '人物名稱...', search: '搜尋',
+    browse_local: '瀏覽本機', detect_from_video: '從影片偵測', clear: '清除',
+    face_not_set: '未設定（不過濾）',
+    audio_source: '音訊來源', search_song: '搜尋歌曲音訊',
+    song_name_ph: '歌曲名稱...', download: '下載',
+    browse_local_audio: '瀏覽本機音訊',
+    min_seg: '最短片段（秒）', max_seg: '最長片段（秒）',
+    pose_thresh: '姿勢相似度門檻',
+    smart_crop: '智慧裁切 16:9 轉 9:16（追蹤人物）',
+    crossfade: '淡入淡出（秒）', output_res: '輸出解析度',
+    timeline: '轉場時間軸', run_analysis: '執行分析以查看時間軸',
+    ready: '就緒', analyze: '分析影片', replan: '重新規劃', generate: '產生混搭',
+    download_output: '下載成品',
+    search_online_videos: '搜尋線上影片', search_kw_ph: '歌曲名稱或關鍵字...',
+    download_selected: '下載選取項目', close: '關閉', cancel: '取消',
+    select_face: '選擇目標人物', detecting_faces: '正在從影片偵測人臉...',
+    click_to_select: '點擊選擇此人作為參考',
+    face_set: '已設定參考人臉', face_search_ing: '搜尋中...',
+    res_portrait: '（直式）', res_landscape: '（橫式）',
+    found_faces: '偵測到 {n} 個不同人物，請點擊選擇目標：',
+    no_faces: '未偵測到人臉，請先新增影片。',
+    generating: '生成中...',
+  },
+  en: {
+    subtitle: 'Import multiple dance videos, auto-cut on beats to create mashups',
+    qg_person: 'Person Name', qg_song: 'Song Title', qg_btn: 'Quick Generate',
+    qg_person_ph: 'e.g. YUNA', qg_song_ph: 'e.g. Ice Cream',
+    video_list: 'Video List', no_videos: 'No videos yet. Upload or search to add.',
+    upload: '+ Upload', search_online: 'Search Online', clear_all: 'Clear All',
+    settings: 'Settings', ref_face: 'Reference Face (filter videos)',
+    face_name_ph: 'Person name...', search: 'Search',
+    browse_local: 'Browse Local', detect_from_video: 'Detect from Video', clear: 'Clear',
+    face_not_set: 'Not set (no filtering)',
+    audio_source: 'Audio Source', search_song: 'Search Song Audio',
+    song_name_ph: 'Song name...', download: 'Download',
+    browse_local_audio: 'Browse Local Audio',
+    min_seg: 'Min Segment (sec)', max_seg: 'Max Segment (sec)',
+    pose_thresh: 'Pose Similarity Threshold',
+    smart_crop: 'Smart Crop 16:9 to 9:16 (follow person)',
+    crossfade: 'Crossfade (sec)', output_res: 'Output Resolution',
+    timeline: 'Transition Timeline', run_analysis: 'Run analysis to see timeline',
+    ready: 'Ready', analyze: 'Analyze Videos', replan: 'Replan', generate: 'Generate Mashup',
+    download_output: 'Download Output',
+    search_online_videos: 'Search Online Videos', search_kw_ph: 'Song name or keywords...',
+    download_selected: 'Download Selected', close: 'Close', cancel: 'Cancel',
+    select_face: 'Select Target Person', detecting_faces: 'Detecting faces from videos...',
+    click_to_select: 'Click to select as reference',
+    face_set: 'Reference face set', face_search_ing: 'Searching...',
+    res_portrait: ' (Portrait)', res_landscape: ' (Landscape)',
+    found_faces: 'Found {n} distinct persons. Click to select:',
+    no_faces: 'No faces detected. Please add videos first.',
+    generating: 'Generating...',
+  }
+};
+
+let currentLang = 'zh';
+
+function toggleLang() {
+  currentLang = currentLang === 'zh' ? 'en' : 'zh';
+  document.getElementById('btnLang').textContent = currentLang === 'zh' ? 'EN' : '中文';
+  applyLang();
+}
+
+function t(key, vars) {
+  let s = LANG[currentLang][key] || LANG['zh'][key] || key;
+  if (vars) {
+    for (const [k, v] of Object.entries(vars)) s = s.replace(`{${k}}`, v);
+  }
+  return s;
+}
+
+function applyLang() {
+  document.querySelectorAll('[data-i18n]').forEach(el => {
+    const key = el.getAttribute('data-i18n');
+    if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') return;
+    el.textContent = t(key);
+  });
+  document.querySelectorAll('[data-i18n-placeholder]').forEach(el => {
+    el.placeholder = t(el.getAttribute('data-i18n-placeholder'));
+  });
+  // Update resolution dropdown text
+  const res = document.getElementById('resolution');
+  const opts = res.options;
+  opts[0].text = '1080x1920' + t('res_portrait');
+  opts[1].text = '720x1280' + t('res_portrait');
+  opts[2].text = '1920x1080' + t('res_landscape');
+  opts[3].text = '1280x720' + t('res_landscape');
+}
+
+// ── State ──
+let searchResultsData = [];
+let faceCandidates = [];
+
+// ── SSE ──
+const evtSource = new EventSource('/api/events');
+evtSource.addEventListener('progress', e => {
+  const d = JSON.parse(e.data);
+  document.getElementById('progressFill').style.width = (d.value * 100) + '%';
+  if (d.text) document.getElementById('statusText').textContent = d.text;
+});
+
+// Restore task state on page load (reconnection support)
+(async function restoreTaskState() {
+  try {
+    const r = await fetch('/api/task_status');
+    const st = await r.json();
+    if (st.active || st.progress > 0) {
+      document.getElementById('progressFill').style.width = (st.progress * 100) + '%';
+      if (st.text) document.getElementById('statusText').textContent = st.text;
+      if (st.active) {
+        document.getElementById('btnQuickGen').disabled = true;
+      }
+    }
+    if (st.result) {
+      if (st.result.event === 'render_done' && st.result.data.filename) {
+        showOutput(st.result.data.filename);
+      } else if (st.result.event === 'error_event') {
+        document.getElementById('statusText').textContent = st.result.data.text || 'Error';
+      }
+    }
+  } catch(e) {}
+})();
+evtSource.addEventListener('error_event', e => {
+  const d = JSON.parse(e.data);
+  document.getElementById('statusText').textContent = d.text;
+});
+evtSource.addEventListener('download_done', () => refreshVideos());
+evtSource.addEventListener('analysis_done', e => {
+  refreshVideos();
+  refreshTimeline();
+  document.getElementById('btnReplan').disabled = false;
+  document.getElementById('btnRender').disabled = false;
+});
+evtSource.addEventListener('render_done', e => {
+  const d = JSON.parse(e.data);
+  showOutput(d.filename);
+  document.getElementById('btnQuickGen').disabled = false;
+});
+evtSource.addEventListener('audio_done', e => {
+  const d = JSON.parse(e.data);
+  document.getElementById('audioStatus').textContent = (currentLang === 'zh' ? '就緒: ' : 'Ready: ') + d.title;
+  refreshAudioSources();
+});
+evtSource.addEventListener('face_done', () => {
+  document.getElementById('faceStatus').textContent = t('face_set');
+});
+evtSource.addEventListener('error', e => {
+  if (e.data) {
+    try {
+      const d = JSON.parse(e.data);
+      document.getElementById('statusText').textContent = d.text || 'Error';
+    } catch(_) {}
+  }
+});
+
+// ── Range sliders ──
+for (const [id, valId, fmt] of [
+  ['minDur','minDurVal','1'], ['maxDur','maxDurVal','1'],
+  ['simThresh','simThreshVal','2'], ['crossfade','crossfadeVal','2']
+]) {
+  const el = document.getElementById(id);
+  const vl = document.getElementById(valId);
+  el.addEventListener('input', () => {
+    vl.textContent = parseFloat(el.value).toFixed(parseInt(fmt));
+  });
+}
+
+// ── File inputs ──
+document.getElementById('fileInput').addEventListener('change', async e => {
+  for (const file of e.target.files) {
+    const fd = new FormData();
+    fd.append('file', file);
+    document.getElementById('statusText').textContent = (currentLang === 'zh' ? '上傳中: ' : 'Uploading: ') + file.name;
+    await fetch('/api/videos/upload', { method: 'POST', body: fd });
+  }
+  e.target.value = '';
+  refreshVideos();
+  document.getElementById('statusText').textContent = currentLang === 'zh' ? '上傳完成' : 'Upload done';
+});
+
+document.getElementById('faceFileInput').addEventListener('change', async e => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const fd = new FormData();
+  fd.append('file', file);
+  const r = await fetch('/api/face/upload', { method: 'POST', body: fd });
+  const d = await r.json();
+  document.getElementById('faceStatus').textContent = d.ok ? t('face_set') : (d.error || 'Failed');
+  e.target.value = '';
+});
+
+document.getElementById('audioFileInput').addEventListener('change', async e => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const fd = new FormData();
+  fd.append('file', file);
+  const r = await fetch('/api/audio/upload', { method: 'POST', body: fd });
+  const d = await r.json();
+  document.getElementById('audioStatus').textContent = (currentLang === 'zh' ? '已載入: ' : 'Loaded: ') + d.title;
+  refreshAudioSources();
+  e.target.value = '';
+});
+
+// ── API helpers ──
+async function refreshVideos() {
+  const r = await fetch('/api/videos');
+  const vids = await r.json();
+  const list = document.getElementById('videoList');
+  if (!vids.length) {
+    list.innerHTML = `<div style="padding:24px;text-align:center;color:var(--fg2)">${t('no_videos')}</div>`;
+    refreshAudioSources();
+    return;
+  }
+  const colors = ['#FF6B6B','#4ECDC4','#45B7D1','#96CEB4','#FFEAA7','#DDA0DD','#98D8C8','#F7DC6F'];
+  list.innerHTML = vids.map((v, i) => `
+    <div class="video-item" data-idx="${i}">
+      <div class="color-dot" style="background:${colors[i % colors.length]}"></div>
+      <img class="thumb" src="/api/videos/thumbnail/${i}" onerror="this.style.display='none'">
+      <div class="info">
+        <div class="name" title="${v.filename}">${v.source_url
+          ? `<a href="${v.source_url}" target="_blank" rel="noopener" style="color:inherit;text-decoration:none" onmouseover="this.style.textDecoration='underline'" onmouseout="this.style.textDecoration='none'">${v.filename} <span style="opacity:.6;font-size:.85em">↗</span></a>`
+          : v.filename}</div>
+        <div class="meta">${v.duration}s &middot; ${v.fps}fps &middot; ${v.width}x${v.height}${v.has_poses ? ' &middot; ✓' : ''}</div>
+      </div>
+      <button class="remove-btn" onclick="removeVideo(${i})" title="Remove">&times;</button>
+    </div>
+  `).join('');
+  refreshAudioSources();
+}
+
+async function refreshAudioSources() {
+  const r = await fetch('/api/videos');
+  const vids = await r.json();
+  const ai = await (await fetch('/api/audio/info')).json();
+  const sel = document.getElementById('audioSource');
+  sel.innerHTML = vids.map((v, i) => `<option value="${i}">${currentLang === 'zh' ? '影片' : 'Video'} ${i+1}: ${v.filename}</option>`).join('');
+  if (ai.has_external) {
+    sel.innerHTML += `<option value="external">${currentLang === 'zh' ? '外部' : 'External'}: ${ai.title}</option>`;
+  }
+}
+
+async function removeVideo(idx) {
+  await fetch(`/api/videos/${idx}`, { method: 'DELETE' });
+  refreshVideos();
+  refreshTimeline();
+}
+
+async function clearAll() {
+  await fetch('/api/videos/clear', { method: 'POST' });
+  refreshVideos();
+  refreshTimeline();
+  document.getElementById('btnReplan').disabled = true;
+  document.getElementById('btnRender').disabled = true;
+  document.getElementById('outputPreview').style.display = 'none';
+}
+
+// ── Face ──
+async function searchFace() {
+  const name = document.getElementById('faceName').value.trim();
+  if (!name) return;
+  document.getElementById('btnFaceSearch').disabled = true;
+  document.getElementById('faceStatus').textContent = t('face_search_ing');
+  await fetch('/api/face/search', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ name })
+  });
+  document.getElementById('btnFaceSearch').disabled = false;
+}
+
+async function clearFace() {
+  await fetch('/api/face/clear', { method: 'POST' });
+  document.getElementById('faceStatus').textContent = t('face_not_set');
+}
+
+// ── Face detection from videos ──
+async function detectFacesFromVideos() {
+  document.getElementById('faceModal').classList.add('active');
+  document.getElementById('faceDetectStatus').textContent = t('detecting_faces');
+  document.getElementById('faceGrid').innerHTML = '';
+
+  try {
+    const r = await fetch('/api/face/detect_from_videos', { method: 'POST' });
+    const d = await r.json();
+    if (d.error) {
+      document.getElementById('faceDetectStatus').textContent = d.error;
+      return;
+    }
+    faceCandidates = d.faces || [];
+    if (!faceCandidates.length) {
+      document.getElementById('faceDetectStatus').textContent = t('no_faces');
+      return;
+    }
+    document.getElementById('faceDetectStatus').textContent = t('found_faces', {n: faceCandidates.length});
+    const grid = document.getElementById('faceGrid');
+    grid.innerHTML = faceCandidates.map((f, i) => `
+      <div class="face-card" onclick="selectFaceCandidate(${i})">
+        <img src="/api/face/candidate/${i}" alt="Face ${i+1}">
+        <div class="face-card-label">${currentLang === 'zh' ? '人物' : 'Person'} ${i+1}</div>
+        <div class="face-card-meta">${f.count}x ${currentLang === 'zh' ? '出現' : 'seen'}, ${currentLang === 'zh' ? '相似度' : 'sim'} ${f.avg_sim.toFixed(2)}</div>
+      </div>
+    `).join('');
+  } catch(e) {
+    document.getElementById('faceDetectStatus').textContent = 'Error: ' + e.message;
+  }
+}
+
+async function selectFaceCandidate(idx) {
+  const r = await fetch('/api/face/select_candidate', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ index: idx })
+  });
+  const d = await r.json();
+  if (d.ok) {
+    document.getElementById('faceStatus').textContent = t('face_set');
+    closeFaceModal();
+  }
+}
+
+function closeFaceModal() {
+  document.getElementById('faceModal').classList.remove('active');
+}
+
+// ── Audio ──
+async function searchAudio() {
+  const q = document.getElementById('songQuery').value.trim();
+  if (!q) return;
+  document.getElementById('btnAudioSearch').disabled = true;
+  await fetch('/api/audio/search', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ query: q })
+  });
+  document.getElementById('btnAudioSearch').disabled = false;
+}
+
+// ── Search modal ──
+function openSearchModal() {
+  document.getElementById('searchModal').classList.add('active');
+  document.getElementById('searchQuery').focus();
+}
+function closeSearchModal() {
+  document.getElementById('searchModal').classList.remove('active');
+}
+document.getElementById('searchQuery').addEventListener('keydown', e => {
+  if (e.key === 'Enter') doSearch();
+});
+
+async function doSearch() {
+  const q = document.getElementById('searchQuery').value.trim();
+  if (!q) return;
+  const pf = document.getElementById('searchPlatform').value;
+  document.getElementById('btnSearch').disabled = true;
+  document.getElementById('searchStatus').textContent = currentLang === 'zh' ? '搜尋中...' : 'Searching...';
+  try {
+    const r = await fetch('/api/videos/search', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ query: q, platform: pf })
+    });
+    searchResultsData = await r.json();
+    if (searchResultsData.error) {
+      document.getElementById('searchStatus').textContent = searchResultsData.error;
+      return;
+    }
+    const ul = document.getElementById('searchResults');
+    ul.innerHTML = searchResultsData.map((r, i) => {
+      const dur = r.duration || 0;
+      const m = Math.floor(dur / 60), s = dur % 60;
+      return `<li onclick="this.querySelector('input').click()">
+        <input type="checkbox" data-idx="${i}" onclick="event.stopPropagation()">
+        <span>${r.title} (${m}:${String(Math.floor(s)).padStart(2,'0')})</span>
+      </li>`;
+    }).join('');
+    document.getElementById('searchStatus').textContent = `${currentLang === 'zh' ? '找到' : 'Found'} ${searchResultsData.length} ${currentLang === 'zh' ? '筆結果' : 'results'}`;
+    document.getElementById('btnDownload').disabled = false;
+  } catch(e) {
+    document.getElementById('searchStatus').textContent = (currentLang === 'zh' ? '搜尋失敗: ' : 'Search failed: ') + e.message;
+  } finally {
+    document.getElementById('btnSearch').disabled = false;
+  }
+}
+
+async function doDownload() {
+  const checks = document.querySelectorAll('#searchResults input[type="checkbox"]:checked');
+  if (!checks.length) { alert(currentLang === 'zh' ? '請先選擇影片' : 'Please select videos first'); return; }
+  const items = Array.from(checks).map(c => searchResultsData[parseInt(c.dataset.idx)]);
+  document.getElementById('btnDownload').disabled = true;
+  document.getElementById('searchStatus').textContent = currentLang === 'zh' ? '開始下載...' : 'Starting download...';
+  await fetch('/api/videos/download', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ items })
+  });
+}
+
+// ── Quick Generate ──
+async function quickGenerate() {
+  const person = document.getElementById('qgPerson').value.trim();
+  const song = document.getElementById('qgSong').value.trim();
+  if (!person || !song) {
+    alert(currentLang === 'zh' ? '請輸入人物名稱和曲目名稱' : 'Please enter person name and song title');
+    return;
+  }
+  document.getElementById('btnQuickGen').disabled = true;
+  document.getElementById('statusText').textContent = t('generating');
+
+  // Also fill in the face name and song fields
+  document.getElementById('faceName').value = person;
+  document.getElementById('songQuery').value = song;
+
+  await fetch('/api/auto_generate', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({
+      person,
+      song,
+      min_dur: parseFloat(document.getElementById('minDur').value),
+      max_dur: parseFloat(document.getElementById('maxDur').value),
+      sim_thresh: parseFloat(document.getElementById('simThresh').value),
+      smart_crop: document.getElementById('smartCrop').checked,
+      crossfade: parseFloat(document.getElementById('crossfade').value),
+      resolution: document.getElementById('resolution').value,
+    })
+  });
+  // btnQuickGen re-enabled on render_done event
+}
+
+// ── Analysis ──
+async function runAnalysis() {
+  const audioSel = document.getElementById('audioSource');
+  const audioVal = audioSel.value;
+  const isExt = audioVal === 'external';
+  const audioIdx = isExt ? 0 : parseInt(audioVal) || 0;
+
+  document.getElementById('btnAnalyze').disabled = true;
+  document.getElementById('btnRender').disabled = true;
+  await fetch('/api/analyze', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({
+      min_dur: parseFloat(document.getElementById('minDur').value),
+      max_dur: parseFloat(document.getElementById('maxDur').value),
+      sim_thresh: parseFloat(document.getElementById('simThresh').value),
+      audio_idx: audioIdx,
+      use_external: isExt,
+    })
+  });
+  document.getElementById('btnAnalyze').disabled = false;
+}
+
+// ── Replan ──
+async function runReplan() {
+  const r = await fetch('/api/replan', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({
+      min_dur: parseFloat(document.getElementById('minDur').value),
+      max_dur: parseFloat(document.getElementById('maxDur').value),
+      sim_thresh: parseFloat(document.getElementById('simThresh').value),
+    })
+  });
+  const d = await r.json();
+  document.getElementById('statusText').textContent = `${currentLang === 'zh' ? '重新規劃: ' : 'Replanned: '}${d.segments} ${currentLang === 'zh' ? '段' : 'segments'}`;
+  refreshTimeline();
+}
+
+// ── Render ──
+async function runRender() {
+  const res = document.getElementById('resolution').value.split('x');
+  const audioSel = document.getElementById('audioSource');
+  const audioVal = audioSel.value;
+  const isExt = audioVal === 'external';
+  const audioIdx = isExt ? 0 : parseInt(audioVal) || 0;
+
+  document.getElementById('btnRender').disabled = true;
+  document.getElementById('outputPreview').style.display = 'none';
+  await fetch('/api/render', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({
+      width: parseInt(res[0]),
+      height: parseInt(res[1]),
+      smart_crop: document.getElementById('smartCrop').checked,
+      crossfade: parseFloat(document.getElementById('crossfade').value),
+      audio_idx: audioIdx,
+      use_external: isExt,
+    })
+  });
+  document.getElementById('btnRender').disabled = false;
+}
+
+// ── Timeline ──
+async function refreshTimeline() {
+  const r = await fetch('/api/segments');
+  const d = await r.json();
+  const bar = document.getElementById('timeline');
+  const label = document.getElementById('tlLabel');
+  if (!d.segments.length) {
+    bar.innerHTML = `<div style="padding:10px;color:var(--fg2);font-size:0.8rem;width:100%;text-align:center">${t('run_analysis')}</div>`;
+    label.textContent = '';
+    return;
+  }
+  const total = d.total_duration;
+  bar.innerHTML = d.segments.map(s => {
+    const pct = ((s.end - s.start) / total * 100).toFixed(2);
+    const col = d.colors[s.video_idx] || '#666';
+    return `<div class="timeline-seg" style="width:${pct}%;background:${col}"
+                 title="V${s.video_idx+1} ${s.start.toFixed(1)}-${s.end.toFixed(1)}s sim=${s.similarity.toFixed(2)}">
+              ${pct > 3 ? 'V' + (s.video_idx+1) : ''}
+            </div>`;
+  }).join('');
+  label.textContent = `${d.segments.length} ${currentLang === 'zh' ? '段' : 'segments'}, ${total.toFixed(1)}s`;
+}
+
+// ── Output ──
+function showOutput(filename) {
+  const preview = document.getElementById('outputPreview');
+  const video = document.getElementById('outputVideo');
+  const dl = document.getElementById('outputDownload');
+  const url = '/output/' + encodeURIComponent(filename);
+  video.src = url;
+  dl.href = url;
+  dl.download = filename;
+  preview.style.display = 'block';
+  video.scrollIntoView({ behavior: 'smooth' });
+}
+
+// ── Init ──
+refreshVideos();
+refreshTimeline();
+</script>
+</body>
+</html>

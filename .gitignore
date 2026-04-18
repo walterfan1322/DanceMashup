@@ -1,0 +1,46 @@
+# Virtual envs
+venv/
+.venv/
+env/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+
+# Project runtime artifacts
+downloads/
+output/
+audio/
+face_library/
+face_ref/
+.cache_tracks/
+server.log
+*.log
+
+# Model weights / binaries (download separately)
+yolov8n.pt
+yt-dlp
+yt-dlp_macos
+yt-dlp.exe
+rife-ncnn-vulkan/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.idea/
+.vscode/
+*.swp
+
+# Backups / dev artifacts
+*.bak
+*.bak_*
+patch_*.py
+check_*.py
+test_*.py
+diag_*.py
+inspect_*.py
