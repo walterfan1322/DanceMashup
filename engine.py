@@ -7,6 +7,12 @@ Uses MediaPipe for pose, librosa for beats, OpenCV for frames, ffmpeg for encodi
 
 import cv2
 import numpy as np
+# DELOGO_V1 — lazy import guarded; missing module is non-fatal
+try:
+    import logo_detect as _logo_detect
+except Exception as _e:
+    _logo_detect = None
+    print(f'[warn] logo_detect unavailable: {_e}')
 import json
 import os
 import platform
@@ -15,7 +21,7 @@ import subprocess
 import hashlib
 import shutil
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List, Optional, Callable, Tuple
 
 _SUBPROCESS_EXTRA = ({"creationflags": subprocess.CREATE_NO_WINDOW}
@@ -54,6 +60,9 @@ class Segment:
     start_time: float
     end_time: float
     similarity: float = 0.0
+    # Top-K (video_idx, score) alternatives at this time window — populated
+    # by plan_transitions, consumed by UI segment-swap.
+    candidates: list = field(default_factory=list)
 
     @property
     def duration(self) -> float:
@@ -61,6 +70,51 @@ class Segment:
 
 
 # ────────────────────────────────────────────────────────────────
+
+# PROGRESS_HOOK_V1 — module-level hooks wired by web.py
+progress_hook = None   # callable(text: str, pct: Optional[float])  for ticks
+phase_hook    = None   # callable(action: str, name: str)  action ∈ {"begin","end"}
+
+
+def set_progress_hook(fn):
+    global progress_hook
+    progress_hook = fn
+    try:
+        import person_tracker as _pt
+        _pt.set_progress_hook(fn)
+    except Exception:
+        pass
+
+
+def set_phase_hook(fn):
+    global phase_hook
+    phase_hook = fn
+
+
+def _pg_tick(text, pct=None):
+    try:
+        if progress_hook is not None:
+            progress_hook(text, pct)
+    except Exception:
+        pass
+
+
+def _pg_phase_begin(name):
+    try:
+        if phase_hook is not None:
+            phase_hook("begin", name)
+    except Exception:
+        pass
+
+
+def _pg_phase_end(name=""):
+    try:
+        if phase_hook is not None:
+            phase_hook("end", name)
+    except Exception:
+        pass
+
+
 class DanceMashupEngine:
     """End-to-end engine for creating dance mashup videos."""
 
@@ -73,6 +127,11 @@ class DanceMashupEngine:
         self.external_audio_title: str = ""
         self._face_app = None
         self.reference_embedding: Optional[np.ndarray] = None
+        # IDENTITY_POOL_V1 — multi-reference + peer-negative pools
+        self.reference_embeddings: Optional[np.ndarray] = None
+        self.negative_embeddings: Optional[np.ndarray] = None
+        self.delogo_enabled = True  # DELOGO_V1
+        self._final_cache = {}
         self._interp_cache: dict = {}  # video_idx -> (path, fps)
         self.audio_offsets: dict = {}   # video_idx -> offset_seconds
         self.remote_rife: Optional[dict] = None  # {'host': ..., 'bin': ..., 'model': ..., 'gpu': ..., 'work_dir': ...}
@@ -87,16 +146,12 @@ class DanceMashupEngine:
         return self._ffmpeg
 
     def _get_ytdlp_binary(self) -> Optional[str]:
-        # Prefer a local bundled binary next to this script, then PATH.
-        here = os.path.dirname(os.path.abspath(__file__))
         for candidate in (
-            os.path.join(here, 'yt-dlp_macos'),
-            os.path.join(here, 'yt-dlp'),
-            os.path.join(here, 'yt-dlp.exe'),
+            os.path.expanduser('~/DanceMashup/yt-dlp_macos'),
         ):
             if os.path.isfile(candidate):
                 return candidate
-        return shutil.which('yt-dlp') or shutil.which('yt-dlp_macos')
+        return shutil.which('yt-dlp_macos')
 
     # ── Video management ────────────────────────────────────────
 
@@ -365,7 +420,7 @@ class DanceMashupEngine:
         """Configure remote RIFE interpolation via SSH.
 
         Args:
-            host: SSH host (e.g. 'user@gpu-box.local')
+            host: SSH host (e.g. 'user@remote-gpu.local')
             gpu: GPU index on remote machine (default 1 for dedicated GPU)
             bin_path: Path to rife-ncnn-vulkan.exe on remote machine
             model_path: Path to RIFE model dir on remote machine
@@ -483,6 +538,46 @@ class DanceMashupEngine:
                         f"已建立 {name} 的人臉參考（{int(mask.sum())} 張共識）")
         return best_crop
 
+
+    # IDENTITY_POOL_V1 — multi-reference + peer-negative helpers
+    def _set_ref_pool(self, pool, negatives=None):
+        """Install a multi-reference pool (N,512) and optional negatives (M,512).
+        Also sets self.reference_embedding to the pool's normalised mean for
+        back-compat with any old callsites."""
+        def _norm2d(arr):
+            if arr is None:
+                return None
+            arr = np.asarray(arr, dtype=np.float32)
+            if arr.size == 0:
+                return None
+            if arr.ndim == 1:
+                arr = arr[None, :]
+            norms = np.linalg.norm(arr, axis=1, keepdims=True) + 1e-8
+            return arr / norms
+        self.reference_embeddings = _norm2d(pool)
+        self.negative_embeddings = _norm2d(negatives)
+        if self.reference_embeddings is not None:
+            mean = self.reference_embeddings.mean(axis=0)
+            self.reference_embedding = mean / (np.linalg.norm(mean) + 1e-8)
+
+    def _face_score(self, emb, penalty_thresh: float = 0.35,
+                    penalty_weight: float = 0.6) -> float:
+        """Cosine score against the target pool with a peer-negative penalty.
+        Falls back to single reference_embedding when no pool is set."""
+        e = np.asarray(emb, dtype=np.float32)
+        e = e / (np.linalg.norm(e) + 1e-8)
+        if self.reference_embeddings is not None:
+            target = float(np.max(self.reference_embeddings @ e))
+        elif self.reference_embedding is not None:
+            target = float(np.dot(self.reference_embedding, e))
+        else:
+            return 0.0
+        if self.negative_embeddings is not None:
+            neg = float(np.max(self.negative_embeddings @ e))
+            if neg > penalty_thresh:
+                target -= penalty_weight * (neg - penalty_thresh)
+        return target
+
     def set_reference_face(self, image_path: str) -> np.ndarray:
         """Set reference face from a local image. Returns RGB face crop."""
         img = cv2.imread(image_path)
@@ -503,6 +598,9 @@ class DanceMashupEngine:
 
     def clear_reference_face(self):
         self.reference_embedding = None
+        # IDENTITY_POOL_V1
+        self.reference_embeddings = None
+        self.negative_embeddings = None
 
     def verify_face_by_thumbnail(self, video_id: str,
                                 platform: str = 'youtube',
@@ -539,7 +637,7 @@ class DanceMashupEngine:
                 faces = app.get(img)
                 for face in faces:
                     emb = face.embedding / (np.linalg.norm(face.embedding) + 1e-8)
-                    sim = float(np.dot(self.reference_embedding, emb))
+                    sim = self._face_score(emb)
                     if sim > best:
                         best = sim
                 if best >= threshold:
@@ -595,7 +693,7 @@ class DanceMashupEngine:
             faces = app.get(frame)
             for face in faces:
                 emb = face.embedding / (np.linalg.norm(face.embedding) + 1e-8)
-                sim = float(np.dot(self.reference_embedding, emb))
+                sim = self._face_score(emb)
                 if sim > best:
                     best = sim
                 if best >= threshold:
@@ -604,6 +702,61 @@ class DanceMashupEngine:
 
         cap.release()
         return best >= threshold, best
+
+    def measure_face_visibility_ratio(self, video_path: str,
+                                      sample_count: int = 20,
+                                      threshold: float = 0.45
+                                      ) -> Tuple[float, float]:
+        """Sample *sample_count* frames evenly and compute the fraction
+        where the reference face is visible at sim >= *threshold*.
+
+        Returns ``(ratio, best_sim)``. Ratio mirrors the plan_transitions
+        video-level face_visibility filter (default 15 %), so videos that
+        fail here would also be filtered later — catching them at download
+        time saves YOLO tracking work.
+        """
+        if self.reference_embedding is None:
+            return 1.0, 1.0
+
+        cap = cv2.VideoCapture(video_path)
+        total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        if total <= 0:
+            cap.release()
+            return 0.0, 0.0
+
+        frames = [int(total * (i + 1) / (sample_count + 1))
+                  for i in range(sample_count)]
+        app = self._get_face_app()
+        scale = max(1, 960 // max(w, 1))
+
+        hits = 0
+        best = 0.0
+        seen = 0
+        for fi in frames:
+            cap.set(cv2.CAP_PROP_POS_FRAMES, fi)
+            ok, frame = cap.read()
+            if not ok:
+                continue
+            seen += 1
+            if scale > 1:
+                frame = cv2.resize(frame, (frame.shape[1] * scale,
+                                           frame.shape[0] * scale))
+            faces = app.get(frame)
+            top_sim = 0.0
+            for face in faces:
+                emb = face.embedding / (np.linalg.norm(face.embedding) + 1e-8)
+                sim = self._face_score(emb)
+                if sim > top_sim:
+                    top_sim = sim
+            if top_sim > best:
+                best = top_sim
+            if top_sim >= threshold:
+                hits += 1
+
+        cap.release()
+        ratio = hits / seen if seen else 0.0
+        return ratio, best
 
     def detect_members_in_video(self, video_path: str,
                                 group_embeddings: dict,
@@ -911,7 +1064,7 @@ class DanceMashupEngine:
             if faces:
                 for face in faces:
                     emb = face.embedding / (np.linalg.norm(face.embedding) + 1e-8)
-                    sim = float(np.dot(self.reference_embedding, emb))
+                    sim = self._face_score(emb)
                     if sim > max_sim:
                         max_sim = sim
             visibility.append((t, max_sim))
@@ -924,8 +1077,8 @@ class DanceMashupEngine:
               f" (avg_sim={avg_sim:.3f})", flush=True)
 
     def _is_face_visible(self, video_idx: int, t: float,
-                         window: float = 2.0,
-                         sim_thresh: float = 0.45) -> bool:
+                         window: float = 0.8,
+                         sim_thresh: float = 0.50) -> bool:
         """Check if reference face is visible near time t in video."""
         if video_idx not in self.face_visibility:
             return True  # assume visible if not computed
@@ -938,6 +1091,35 @@ class DanceMashupEngine:
                 if sim >= sim_thresh:
                     return True
         return False
+
+    def _is_face_visible_continuous(self, video_idx: int, t_start: float,
+                                    lookahead: float = 4.0,
+                                    sample_interval: float = 1.0,
+                                    min_pass_ratio: float = 0.7,
+                                    window: float = 0.8,
+                                    sim_thresh: float = 0.50) -> bool:
+        """Require target face to be visible throughout a forward window.
+
+        Samples [t_start, t_start+lookahead] every sample_interval and returns
+        True only if at least min_pass_ratio of those samples have the target
+        visible (sim >= sim_thresh within +/-window). This prevents cutting to
+        a segment where the target briefly appears then disappears.
+        """
+        if video_idx not in self.face_visibility:
+            return True
+        vis = self.face_visibility[video_idx]
+        if not vis:
+            return True
+        n = max(1, int(lookahead / sample_interval))
+        passes = 0
+        for i in range(n):
+            check_t = t_start + i * sample_interval
+            for sample_t, sim in vis:
+                if abs(sample_t - check_t) <= window:
+                    if sim >= sim_thresh:
+                        passes += 1
+                        break
+        return (passes / n) >= min_pass_ratio
 
     def _face_score_at(self, video_idx: int, t: float,
                        window: float = 2.0) -> float:
@@ -1014,7 +1196,8 @@ class DanceMashupEngine:
             if cp is None:
                 continue
 
-            best_v, best_s = -1, -1.0
+            # Score every candidate video; remember top-K for UI swap.
+            scored = []  # (score, video_idx)
             for v in range(nv):
                 if v == cur:
                     continue
@@ -1022,24 +1205,46 @@ class DanceMashupEngine:
                     continue
                 if v == prev and elapsed < max_dur and nv > 2:
                     continue
-                # Skip video if reference face not visible at this time
+                # Skip video if reference face not continuously visible
+                # across the forward lookahead window (prevents cuts where
+                # target appears briefly then disappears).
                 vid_t = bt + self.audio_offsets.get(v, 0.0)
-                if not self._is_face_visible(v, vid_t):
+                if not self._is_face_visible_continuous(v, vid_t):
                     continue
                 tp = self._pose_at(v, vid_t)
                 if tp is None:
                     continue
                 pose_s = self._similarity(cp, tp)
                 motion_s = self._motion_similarity(cur, v, bt, offsets=self.audio_offsets)
-                # Boost score when face is clearly visible
                 face_s = self._face_score_at(v, vid_t)
-                face_bonus = max(0, face_s - 0.3) * 1.2  # up to +0.1 bonus
+                face_bonus = max(0, face_s - 0.3) * 1.2
                 s = 0.6 * pose_s + 0.4 * motion_s + face_bonus
-                if s > best_s:
-                    best_s, best_v = s, v
+                scored.append((s, v))
+
+            scored.sort(key=lambda x: -x[0])
+            best_s, best_v = (scored[0] if scored else (-1.0, -1))
 
             if best_v >= 0 and (best_s >= sim_thresh or elapsed >= max_dur):
-                segs.append(Segment(cur, last_t, bt, best_s))
+                # Also score the current video (cur) + prev so UI can offer
+                # "stay on V{cur}" as an alternative.
+                extra = []
+                for v in (cur,) + ((prev,) if prev >= 0 else ()):
+                    if v in good_videos:
+                        vid_t2 = bt + self.audio_offsets.get(v, 0.0)
+                        tp2 = self._pose_at(v, vid_t2)
+                        if tp2 is not None:
+                            pose_s2 = self._similarity(cp, tp2)
+                            extra.append((pose_s2, v))
+                # Dedup by video_idx, keep max score
+                pool = {}
+                for sc, v in scored + extra:
+                    if v not in pool or sc > pool[v]:
+                        pool[v] = sc
+                cands = sorted(pool.items(), key=lambda kv: -kv[1])[:4]
+                cands_list = [{"video_idx": v, "score": float(sc)}
+                              for v, sc in cands]
+                seg = Segment(cur, last_t, bt, best_s, candidates=cands_list)
+                segs.append(seg)
                 prev, cur, last_t = cur, best_v, bt
 
         if last_t < end:
@@ -1047,6 +1252,75 @@ class DanceMashupEngine:
 
         self.segments = segs
         return segs
+
+    # ── Plan persistence / swap ──────────────────────────────────
+
+    def export_plan_json(self, mashup_path: str) -> str:
+        """Write a self-contained plan JSON next to *mashup_path*.
+        Returns the JSON path.
+        """
+        import json as _json
+        out_path = os.path.splitext(mashup_path)[0] + ".plan.json"
+        duration = float(sum(s.duration for s in self.segments)) if self.segments else 0.0
+        vids = []
+        for i, v in enumerate(self.videos):
+            vids.append({
+                "idx": i,
+                "filename": v.filename,
+                "source_url": getattr(v, "source_url", ""),
+                "duration": float(v.duration),
+            })
+        face_vis = {}
+        for vi, vis in (self.face_visibility or {}).items():
+            face_vis[str(vi)] = [[float(t), float(s)] for t, s in vis]
+        segs_out = []
+        for i, s in enumerate(self.segments):
+            segs_out.append({
+                "idx": i,
+                "t_start": float(s.start_time),
+                "t_end": float(s.end_time),
+                "video_idx": int(s.video_idx),
+                "similarity": float(s.similarity),
+                "candidates": list(s.candidates) if s.candidates else [],
+            })
+        beat_list = []
+        try:
+            if self.beat_times is not None:
+                beat_list = [float(t) for t in list(self.beat_times)]
+        except Exception:
+            pass
+        payload = {
+            "schema_version": 1,
+            "mashup": os.path.basename(mashup_path),
+            # AUTOARCHIVE_V2 — carry target identity with the plan
+            "target_group": getattr(self, "target_group", None) or "",
+            "target_member": getattr(self, "target_member", None) or "",
+            # TIKTOK_DLNAME_V1 — so downloads can be named <group>_<member>_<song>
+            "song": getattr(self, "external_audio_title", "") or "",
+            "duration": duration,
+            "videos": vids,
+            "audio_offsets": {str(k): float(v)
+                              for k, v in (self.audio_offsets or {}).items()},
+            "beat_times": beat_list,
+            "face_visibility": face_vis,
+            "segments": segs_out,
+        }
+        with open(out_path, "w", encoding="utf-8") as f:
+            _json.dump(payload, f, indent=2)
+        return out_path
+
+    def apply_plan_segments(self, plan: dict):
+        """Overwrite self.segments from a loaded plan dict."""
+        new_segs = []
+        for s in plan.get("segments", []):
+            new_segs.append(Segment(
+                video_idx=int(s["video_idx"]),
+                start_time=float(s["t_start"]),
+                end_time=float(s["t_end"]),
+                similarity=float(s.get("similarity", 0.0)),
+                candidates=list(s.get("candidates", [])),
+            ))
+        self.segments = new_segs
 
     # ── Smart crop (16:9 → 9:16 follow person) ────────────────
 
@@ -1058,16 +1332,27 @@ class DanceMashupEngine:
         if video.poses is None or len(video.poses) == 0:
             return None
 
+        # CROP_TIGHT_V1 — prefer torso midpoint (hips 23/24 + shoulders
+        # 11/12); ignore raised arms/legs so the crop doesn't get yanked.
         raw = []
+        last = 0.5
         for pose in video.poses:
             vis = pose[:, 2] > 0.3
-            if vis.any():
-                raw.append((pose[vis, 0].min() + pose[vis, 0].max()) / 2.0)
+            torso_ids = [23, 24, 11, 12]  # hips first, shoulders second
+            torso_xs = [pose[k, 0] for k in torso_ids if pose[k, 2] > 0.3]
+            if torso_xs:
+                cx = float(np.mean(torso_xs))
+            elif pose[0, 2] > 0.3:   # nose fallback
+                cx = float(pose[0, 0])
+            elif vis.any():          # last resort: old min/max midpoint
+                cx = float((pose[vis, 0].min() + pose[vis, 0].max()) / 2.0)
             else:
-                raw.append(raw[-1] if raw else 0.5)
+                cx = last
+            raw.append(cx)
+            last = cx
 
         raw = np.array(raw)
-        sigma = max(1, int(video.pose_fps * 0.5))   # ~0.5 s smoothing
+        sigma = max(1, int(video.pose_fps * 0.15))   # CROP_TIGHT_V2: ~0.15s
         smoothed = gaussian_filter1d(raw, sigma=sigma)
         return smoothed, video.pose_fps
 
@@ -1092,36 +1377,49 @@ class DanceMashupEngine:
         from scipy.ndimage import gaussian_filter1d
         video = self.videos[video_idx]
         cache_dir = os.path.join(os.path.dirname(video.path), '.cache_tracks')
+        _tag = f"V{video_idx+1}/{len(self.videos)}"
+        _pg_phase_begin(f"Track {_tag}")
         try:
             tracks = pt.compute_tracks(video.path, cache_dir,
-                                       progress_cb=progress_cb)
+                                       progress_cb=progress_cb,
+                                       tag=_tag)
         except Exception as e:
             print(f"  V{video_idx+1} YOLO-track failed: {e}", flush=True)
+            _pg_phase_end(f"Track {_tag}")
             return None
+        _pg_phase_end(f"Track {_tag}")
         if not tracks:
             return None
         app = self._get_face_app()
+        _pg_phase_begin(f"Identify {_tag}")
         try:
             targets = pt.identify_target_tracks(
                 video.path, tracks, app, self.reference_embedding,
-                sim_thresh=track_sim_thresh)
+                sim_thresh=track_sim_thresh,
+                ref_embeddings=self.reference_embeddings,
+                neg_embeddings=self.negative_embeddings,
+                tag=_tag)
         except Exception as e:
             print(f"  V{video_idx+1} target-id failed: {e}", flush=True)
+            _pg_phase_end(f"Identify {_tag}")
             return None
+        _pg_phase_end(f"Identify {_tag}")
         if not targets:
             print(f"  V{video_idx+1} person-track: no targets >= {track_sim_thresh}",
                   flush=True)
             return None
         pfps = video.pose_fps if video.pose_fps > 0 else 10.0
         n = max(1, int(video.duration * pfps))
-        centers = pt.target_crop_centers(video.path, tracks, targets, n, pfps)
-        sigma = max(1, int(pfps * 0.8))
-        smoothed = gaussian_filter1d(centers, sigma=sigma)
+        # CROP_ZOOMOUT_V1 — also receive per-sample bbox area ratios
+        centers, areas = pt.target_crop_centers(video.path, tracks, targets, n, pfps)
+        sigma = max(1, int(pfps * 0.20))   # CROP_TIGHT_V2: was 0.8
+        smoothed_c = gaussian_filter1d(centers, sigma=sigma)
+        smoothed_a = gaussian_filter1d(areas,   sigma=max(sigma, int(pfps * 0.5)))
         total_target_frames = sum(len(tracks[t]) for t in targets)
         print(f"  V{video_idx+1} person-track: {len(targets)} target tracks,"
               f" {total_target_frames} frames, best sim={max(targets.values()):.3f}",
               flush=True)
-        return smoothed, pfps
+        return smoothed_c, pfps, smoothed_a
 
     def _compute_face_crop_centers(self, video_idx,
                                    sample_interval=0.5,
@@ -1162,7 +1460,7 @@ class DanceMashupEngine:
             for face in faces:
                 cx = (face.bbox[0] + face.bbox[2]) / 2.0 / w
                 emb = face.embedding / (np.linalg.norm(face.embedding) + 1e-8)
-                sim = float(np.dot(self.reference_embedding, emb))
+                sim = self._face_score(emb)
                 if sim > best_sim:
                     second = best_sim
                     best_sim, best_cx = sim, cx
@@ -1195,14 +1493,100 @@ class DanceMashupEngine:
             nearest_idx = np.where(np.abs(sample_t - kf_times[left]) <=
                                    np.abs(sample_t - kf_times[right]), left, right)
             centers[mask_gap] = kc[nearest_idx[mask_gap]]
-        sigma = max(1, int(pfps * 1.0))
+        sigma = max(1, int(pfps * 0.30))   # CROP_TIGHT_V2: was 1.0
         smoothed = gaussian_filter1d(centers, sigma=sigma)
         return smoothed, pfps
 
 
+    # DELOGO_V1 — wrapper that post-processes RIFE output through ffmpeg
+    # delogo to blank out static overlays (broadcaster bugs, captions, etc.).
     def _ensure_60fps(self, video_idx: int,
                       progress_cb: Optional[Callable] = None
                       ) -> Tuple[str, float]:
+        if not hasattr(self, "_final_cache"):
+            self._final_cache = {}
+        if video_idx in self._final_cache:
+            return self._final_cache[video_idx]
+        path, fps = self._ensure_60fps_raw(video_idx, progress_cb)
+        if getattr(self, "delogo_enabled", True) and _logo_detect is not None:
+            try:
+                path, fps = self._apply_delogo(video_idx, path, fps)
+            except Exception as e:
+                print(f"[delogo] video {video_idx} skipped: {e}")
+        self._final_cache[video_idx] = (path, fps)
+        return (path, fps)
+
+    def _apply_delogo(self, video_idx: int, path: str,
+                      fps: float) -> Tuple[str, float]:
+        """Detect static overlay boxes on the SOURCE video and re-encode
+        *path* through ffmpeg delogo. Returns cleaned path (or input if
+        nothing detected / ffmpeg unavailable)."""
+        import subprocess, shutil
+        if _logo_detect is None:
+            return (path, fps)
+        src = self.videos[video_idx].path
+        boxes = _logo_detect.detect_logo_boxes(src, verbose=True)
+        if not boxes:
+            return (path, fps)
+        # Scale boxes from source resolution to current 60fps output
+        src_cap = cv2.VideoCapture(src)
+        sw = int(src_cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
+        sh = int(src_cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
+        src_cap.release()
+        dst_cap = cv2.VideoCapture(path)
+        dw = int(dst_cap.get(cv2.CAP_PROP_FRAME_WIDTH) or sw)
+        dh = int(dst_cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or sh)
+        dst_cap.release()
+        if sw <= 0 or sh <= 0 or dw <= 0 or dh <= 0:
+            return (path, fps)
+        sx_r = dw / sw
+        sy_r = dh / sh
+        scaled = []
+        for b in boxes:
+            x = max(1, int(round(b["x"] * sx_r)))
+            y = max(1, int(round(b["y"] * sy_r)))
+            w = max(2, int(round(b["w"] * sx_r)))
+            h = max(2, int(round(b["h"] * sy_r)))
+            # delogo requires x+w < frame_w and y+h < frame_h
+            if x + w >= dw:
+                w = max(2, dw - x - 1)
+            if y + h >= dh:
+                h = max(2, dh - y - 1)
+            scaled.append({"x": x, "y": y, "w": w, "h": h})
+        chain = _logo_detect.delogo_filter_chain(scaled)
+        if not chain:
+            return (path, fps)
+
+        stem, ext = os.path.splitext(path)
+        clean_path = f"{stem}_clean{ext}"
+        if os.path.exists(clean_path) and os.path.getsize(clean_path) > 0:
+            return (clean_path, fps)
+
+        ffmpeg = shutil.which("ffmpeg") or "ffmpeg"
+        cmd = [ffmpeg, "-y", "-i", path,
+               "-vf", chain,
+               "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
+               "-c:a", "copy", "-movflags", "+faststart",
+               clean_path]
+        print(f"[delogo] v{video_idx}: {len(scaled)} box(es) -> {os.path.basename(clean_path)}")
+        try:
+            subprocess.run(cmd, check=True,
+                           stdout=subprocess.DEVNULL,
+                           stderr=subprocess.PIPE)
+        except subprocess.CalledProcessError as e:
+            err = (e.stderr or b"").decode("utf-8", "ignore")[-400:]
+            print(f"[delogo] ffmpeg failed: {err}")
+            try:
+                if os.path.exists(clean_path):
+                    os.remove(clean_path)
+            except Exception:
+                pass
+            return (path, fps)
+        return (clean_path, fps)
+
+    def _ensure_60fps_raw(self, video_idx: int,
+                          progress_cb: Optional[Callable] = None
+                          ) -> Tuple[str, float]:
         """Return (path, fps) for a ~60fps version of the source.
 
         Uses RIFE AI frame interpolation when available (best quality),
@@ -1500,13 +1884,21 @@ class DanceMashupEngine:
 
     @staticmethod
     def _smart_crop_frame(frame: np.ndarray, center_x: float,
-                          target_aspect: float) -> np.ndarray:
-        """Crop *frame* to *target_aspect* (w/h), following person."""
+                          target_aspect: float,
+                          zoom: float = 1.0) -> np.ndarray:
+        """Crop *frame* to *target_aspect* (w/h), following person.
+
+        CROP_ZOOMOUT_V1 — `zoom` ∈ (0, 1]. zoom=1.0 keeps the tight portrait
+        crop (crop_w = h*aspect). zoom<1 widens horizontally (crop_w grows),
+        clamped to the frame width — used during wide/group shots where the
+        target bbox is small so we pull back and keep them in frame.
+        """
         h, w = frame.shape[:2]
         if w / h <= target_aspect * 1.1:
             return frame                          # already portrait-ish
 
-        crop_w = min(int(h * target_aspect), w)
+        zoom = max(0.3, min(1.0, float(zoom)))
+        crop_w = min(int(h * target_aspect / zoom), w)
         cx_px = int(center_x * w)
         left = max(0, min(cx_px - crop_w // 2, w - crop_w))
         return frame[:, left:left + crop_w]
@@ -1544,10 +1936,13 @@ class DanceMashupEngine:
 
         # Pre-process low-fps sources → 60fps (cached, fast ~6s per video)
         render_sources: dict = {}  # video_idx -> (path, actual_fps)
-        for seg in self.segments:
-            vi = seg.video_idx
-            if vi not in render_sources:
-                render_sources[vi] = self._ensure_60fps(vi, progress_cb)
+        _seen_vi = set()
+        _pending_vi = [s.video_idx for s in self.segments
+                       if s.video_idx not in _seen_vi and not _seen_vi.add(s.video_idx)]
+        for _i, vi in enumerate(_pending_vi):
+            _pg_phase_begin(f"RIFE 60fps V{vi+1} ({_i+1}/{len(_pending_vi)})")
+            render_sources[vi] = self._ensure_60fps(vi, progress_cb)
+            _pg_phase_end(f"RIFE 60fps V{vi+1}")
 
         # pre-compute per-segment frame counts using interpolated fps
         seg_meta = []
@@ -1572,16 +1967,38 @@ class DanceMashupEngine:
         # helper: process a raw BGR frame → final output buffer
         def _process(frame, seg, t):
             if smart_crop and crop_data.get(seg.video_idx):
-                centers, cpfps = crop_data[seg.video_idx]
-                # Smooth sub-sample interpolation (avoids 10fps step jumps)
+                _cd = crop_data[seg.video_idx]
+                # CROP_ZOOMOUT_V1 — tuple may be (centers, pfps) or
+                # (centers, pfps, areas)
+                if len(_cd) >= 3:
+                    centers, cpfps, areas = _cd[0], _cd[1], _cd[2]
+                else:
+                    centers, cpfps = _cd[0], _cd[1]
+                    areas = None
                 fidx = t * cpfps
                 ci = max(0, min(int(fidx), len(centers) - 1))
                 ci_next = min(ci + 1, len(centers) - 1)
                 frac = fidx - int(fidx)
                 smooth_cx = centers[ci] * (1.0 - frac) + centers[ci_next] * frac
+                # CROP_ZOOMOUT_V1 — derive zoom from smoothed bbox area
+                zoom = 1.0
+                if areas is not None and len(areas):
+                    a0 = float(areas[ci]) * (1.0 - frac) + float(areas[ci_next]) * frac
+                    # area thresholds tuned for K-pop fancams:
+                    #   >= 0.09   full portrait (single subject fills ~30% height)
+                    #   0.04-0.09 blend 1.00 → 0.70
+                    #   < 0.04    0.55 (very wide group shot)
+                    if a0 >= 0.09:
+                        zoom = 1.0
+                    elif a0 <= 0.04:
+                        zoom = 0.55
+                    else:
+                        t01 = (a0 - 0.04) / (0.09 - 0.04)
+                        zoom = 0.70 + (1.00 - 0.70) * t01
                 frame = self._smart_crop_frame(
                     frame, smooth_cx,
-                    output_width / output_height)
+                    output_width / output_height,
+                    zoom=zoom)
             return self._resize_frame(frame, output_width, output_height)
 
         # helper: pre-read first `count` processed frames of a segment

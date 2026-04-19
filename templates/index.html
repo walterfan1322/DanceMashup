@@ -5,6 +5,81 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Dance Mashup Studio</title>
 <link rel="stylesheet" href="/static/style.css">
+<style id="SEGMENT_SWAP_PANEL_V1">
+.timeline-seg { cursor: pointer; position: relative; transition: opacity .15s; }
+.timeline-seg:hover { opacity: 0.75; outline: 2px solid #fff4; }
+.timeline-seg.active {
+  box-shadow: inset 0 0 0 2px #fff, 0 0 10px #fff8;
+  z-index: 2;
+}
+.swap-panel {
+  /* PANEL_DOCK_V1 + THREE_COL_V1 */
+  flex: 0 1 620px;
+  max-height: 70vh;
+  background: var(--bg1, #1a1d24); border: 1px solid #444;
+  border-radius: 8px; box-shadow: 0 8px 32px #000a; padding: 14px;
+  overflow-y: auto; font-size: 0.85rem;
+  display: none; text-align: left;
+  position: relative;
+}
+.swap-panel-body {
+  display: flex; gap: 12px; align-items: flex-start;
+  margin-top: 6px;
+}
+.swap-preview-col, .swap-cands-col {
+  flex: 1 1 0; min-width: 0;
+}
+.swap-preview {
+  width: 100%; max-height: none; aspect-ratio: 9 / 16;
+  object-fit: contain;
+}
+@media (max-width: 980px) {
+  .swap-panel-body { flex-direction: column; }
+  .swap-preview { aspect-ratio: auto; max-height: 180px; }
+}
+.swap-panel.show { display: block; }
+.swap-panel h4 { margin: 0 0 6px; font-size: 0.9rem; }
+.swap-panel .sub { color: var(--fg2, #888); font-size: 0.75rem; margin-bottom: 10px; }
+.swap-cand {
+  padding: 7px 9px; margin: 6px 0; border-radius: 5px;
+  background: #0002; border: 1px solid transparent; cursor: pointer;
+  transition: border-color .1s;
+}
+.swap-cand:hover { border-color: #679; }
+.swap-cand.selected { border-color: #4af; background: #4af2; }
+/* BATCH_PREVIEW_V1 */
+.swap-cand.queued::after {
+  content: '★'; color: #ffb74d; margin-left: 6px; font-size: 0.9em;
+}
+.timeline-seg.queued {
+  outline: 2px solid #ffb74d;
+  outline-offset: -2px;
+}
+.swap-preview {
+  width: 100%; max-height: 180px; background: #000;
+  border-radius: 4px; margin: 8px 0; display: none;
+}
+.swap-preview.show { display: block; }
+.swap-actions-row {
+  display: flex; gap: 6px; align-items: center;
+  flex-wrap: wrap; margin-top: 6px;
+}
+.swap-queue-count { color: #ffb74d; font-weight: 600; }
+.swap-cand.current { border-left: 3px solid #fc0; }
+.swap-cand .row1 { display: flex; justify-content: space-between; align-items: center; }
+.swap-cand .vname { font-weight: 600; }
+.swap-cand .score { color: var(--fg2, #888); font-size: 0.75rem; }
+.swap-cand .heatmap {
+  display: flex; gap: 1px; height: 10px; margin-top: 5px;
+  background: #0004; border-radius: 2px; overflow: hidden;
+}
+.swap-cand .heatmap .cell { flex: 1; min-width: 2px; }
+.swap-panel .actions { display: flex; gap: 8px; margin-top: 12px; }
+.swap-panel .close {
+  position: absolute; top: 8px; right: 10px; cursor: pointer;
+  color: var(--fg2, #888); font-size: 1.2rem; border: 0; background: transparent;
+}
+</style>
 </head>
 <body>
 
@@ -21,15 +96,40 @@
 <!-- Quick Generate Bar -->
 <div class="quick-bar">
   <div class="quick-inner">
+    <!-- PERSON_DROPDOWN_V1 -->
     <div class="quick-field">
       <label data-i18n="qg_person">人物名稱</label>
-      <input type="text" id="qgPerson" placeholder="例如: YUNA" data-i18n-placeholder="qg_person_ph">
+      <div style="display:flex; gap:6px;">
+        <select id="qgGroup" style="flex:1; min-width:110px;" onchange="onGroupChange()">
+          <option value="" disabled selected data-i18n="qg_pick_group">選擇團體</option>
+        </select>
+        <select id="qgMember" style="flex:1; min-width:110px;" disabled>
+          <option value="" disabled selected data-i18n="qg_pick_member">選擇成員</option>
+        </select>
+      </div>
+      <input type="hidden" id="qgPerson" value="">
     </div>
     <div class="quick-field">
-      <label data-i18n="qg_song">曲目名稱</label>
-      <input type="text" id="qgSong" placeholder="例如: Ice Cream" data-i18n-placeholder="qg_song_ph">
+      <!-- SONG_REFRESH_BTN_V1 -->
+      <label data-i18n="qg_song" style="display:flex; justify-content:space-between; align-items:center;">
+        <span data-i18n="qg_song">曲目名稱</span>
+        <button type="button" id="btnRefreshSongs" onclick="refreshSongLibrary()"
+                title="從 iTunes 重新抓取最新曲目"
+                data-i18n-title="qg_refresh_title"
+                style="font-size:0.7rem; background:transparent; border:1px solid var(--border);
+                       color:var(--fg2); padding:2px 8px; border-radius:3px; cursor:pointer;">
+          🔄 <span data-i18n="qg_refresh">更新</span>
+        </button>
+      </label>
+      <!-- SONG_DROPDOWN_V1 -->
+      <select id="qgSong" disabled>
+        <option value="" disabled selected data-i18n="qg_pick_song">先選團體</option>
+      </select>
+      <input type="text" id="qgSongCustom" placeholder="或自訂輸入..." data-i18n-placeholder="qg_song_custom_ph" style="margin-top:6px; display:none;">
     </div>
     <button class="btn primary quick-go" onclick="quickGenerate()" id="btnQuickGen" data-i18n="qg_btn">一鍵生成</button>
+    <!-- TASK_CANCEL_V1 -->
+    <button class="btn" id="btnCancel" style="display:none;background:#e04040;color:#fff" onclick="cancelTask()">暫停</button>
   </div>
 </div>
 
@@ -158,6 +258,17 @@
   <div class="progress-wrap">
     <div class="progress-bar"><div class="progress-fill" id="progressFill"></div></div>
     <div class="status-text" id="statusText" data-i18n="ready">就緒</div>
+    <!-- PHASE_PANEL_V1 -->
+    <div id="phasePanel" style="display:none;margin-top:6px;padding:8px 10px;
+         background:rgba(0,0,0,0.28);border-radius:6px;
+         font-family:ui-monospace,Menlo,Consolas,monospace;
+         font-size:12px;line-height:1.55;color:#d8e0ea;max-height:180px;
+         overflow-y:auto">
+      <div id="phaseHeader" style="color:#9cc4ff;margin-bottom:4px">
+        ⏱ <span id="phaseElapsed">00:00</span>
+      </div>
+      <div id="phaseList"></div>
+    </div>
   </div>
 
   <div class="controls">
@@ -166,10 +277,38 @@
     <button class="btn primary" onclick="runRender()" id="btnRender" disabled data-i18n="generate">產生混搭</button>
   </div>
 
+
   <div class="output-preview" id="outputPreview" style="display:none">
-    <video controls id="outputVideo"></video>
-    <div style="margin-top:8px">
-      <a id="outputDownload" class="btn primary" download data-i18n="download_output">下載成品</a>
+    <!-- PANEL_DOCK_V1 -->
+    <div class="output-flex">
+      <div class="output-video-col">
+        <video controls id="outputVideo"></video>
+        <div style="margin-top:8px">
+          <a id="outputDownload" class="btn primary" download data-i18n="download_output">下載成品</a>
+        </div>
+        <!-- TIKTOK_CLIPS_UI_V1 -->
+        <div id="tiktokClips" class="tiktok-clips" style="margin-top:10px"></div>
+      </div>
+      <div class="swap-panel" id="swapPanel">
+          <button class="close" onclick="closeSwapPanel()">×</button>
+          <h4 id="swapTitle">Segment</h4>
+          <div class="sub" id="swapSub"></div>
+          <!-- THREE_COL_V1 -->
+          <div class="swap-panel-body">
+            <div class="swap-preview-col">
+              <video class="swap-preview" id="swapPreview" muted playsinline></video>
+            </div>
+            <div class="swap-cands-col">
+              <div id="swapCands"></div>
+              <div class="actions swap-actions-row">
+                <button class="btn primary" id="swapApplyAllBtn" onclick="applyAllSwaps()"
+                        data-i18n="swap_apply_all">全部套用 (0)</button>
+                <button class="btn" id="swapClearBtn" onclick="clearSwapQueue()"
+                        data-i18n="swap_clear">清除佇列</button>
+              </div>
+            </div>
+          </div>
+        </div>
     </div>
   </div>
 </div>
@@ -225,7 +364,7 @@ const LANG = {
   zh: {
     subtitle: '匯入多個舞蹈影片，自動卡拍剪輯混搭',
     qg_person: '人物名稱', qg_song: '曲目名稱', qg_btn: '一鍵生成',
-    qg_person_ph: '例如: YUNA', qg_song_ph: '例如: Ice Cream',
+    qg_person_ph: '例如: YUNA', qg_song_ph: '例如: Ice Cream', qg_refresh: '更新', qg_refresh_title: '從 iTunes 重新抓取最新曲目', qg_pick_song: '先選團體', qg_song_custom_ph: '或自訂輸入...',
     video_list: '影片列表', no_videos: '尚無影片。請上傳或搜尋新增。',
     upload: '+ 上傳', search_online: '線上搜尋', clear_all: '全部清除',
     settings: '設定', ref_face: '參考人臉（過濾影片）',
@@ -255,7 +394,7 @@ const LANG = {
   en: {
     subtitle: 'Import multiple dance videos, auto-cut on beats to create mashups',
     qg_person: 'Person Name', qg_song: 'Song Title', qg_btn: 'Quick Generate',
-    qg_person_ph: 'e.g. YUNA', qg_song_ph: 'e.g. Ice Cream',
+    qg_person_ph: 'e.g. YUNA', qg_song_ph: 'e.g. Ice Cream', qg_refresh: 'Refresh', qg_refresh_title: 'Re-scrape iTunes for newest releases', qg_pick_song: 'Pick group first', qg_song_custom_ph: 'Or type a custom title...',
     video_list: 'Video List', no_videos: 'No videos yet. Upload or search to add.',
     upload: '+ Upload', search_online: 'Search Online', clear_all: 'Clear All',
     settings: 'Settings', ref_face: 'Reference Face (filter videos)',
@@ -322,12 +461,65 @@ function applyLang() {
 let searchResultsData = [];
 let faceCandidates = [];
 
+// PHASE_PANEL_V1 — live timer + phase history
+let _phaseState = { phases: [], startedAt: 0, active: false };
+function _fmtDur(sec) {
+  sec = Math.max(0, Math.round(sec));
+  const m = Math.floor(sec / 60), s = sec % 60;
+  return String(m).padStart(2,'0') + ':' + String(s).padStart(2,'0');
+}
+function _renderPhasePanel() {
+  const panel = document.getElementById('phasePanel');
+  if (!panel) return;
+  const { phases, startedAt, active } = _phaseState;
+  const hasAny = (phases && phases.length) || active;
+  panel.style.display = hasAny ? 'block' : 'none';
+  if (!hasAny) return;
+  const now = Date.now() / 1000;
+  const elapsed = startedAt > 0 ? (now - startedAt) : 0;
+  document.getElementById('phaseElapsed').textContent = _fmtDur(elapsed);
+  // PHASE_PANEL_V2 — active phase(s) first, then completed in reverse order
+  const _sorted = (phases || []).slice().sort((a, b) => {
+    const aActive = !a.t1, bActive = !b.t1;
+    if (aActive !== bActive) return aActive ? -1 : 1;
+    return (b.t0 || 0) - (a.t0 || 0);
+  });
+  const rows = _sorted.map(p => {
+    const end = p.t1 || now;
+    const d = _fmtDur(end - p.t0);
+    const icon = p.t1 ? '✓' : '▶';
+    const color = p.t1 ? '#88c088' : '#ffd060';
+    return `<div style="color:${color}">${icon} ${_escapeHtml(p.name)}  <span style="color:#8a98a8">${d}</span></div>`;
+  }).join('');
+  document.getElementById('phaseList').innerHTML = rows;
+}
+function _escapeHtml(x) {
+  return String(x).replace(/[&<>"']/g, c =>
+    ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":"&#39;"})[c]);
+}
+setInterval(() => { if (_phaseState.active) _renderPhasePanel(); }, 1000);
+
 // ── SSE ──
 const evtSource = new EventSource('/api/events');
 evtSource.addEventListener('progress', e => {
   const d = JSON.parse(e.data);
   document.getElementById('progressFill').style.width = (d.value * 100) + '%';
-  if (d.text) document.getElementById('statusText').textContent = d.text;
+  if (d.text) {
+    let txt = d.text;
+    if (d.sub_pct != null) {
+      txt += '  [' + Math.round(d.sub_pct * 100) + '%]';
+    }
+    document.getElementById('statusText').textContent = txt;
+  }
+});
+// PHASE_PANEL_V1 — phase event updates panel
+evtSource.addEventListener('phase', e => {
+  try {
+    const d = JSON.parse(e.data);
+    _phaseState.phases = d.phases || [];
+    _phaseState.active = true;
+    _renderPhasePanel();
+  } catch (_) {}
 });
 
 // Restore task state on page load (reconnection support)
@@ -342,9 +534,15 @@ evtSource.addEventListener('progress', e => {
         document.getElementById('btnQuickGen').disabled = true;
       }
     }
+    // PHASE_PANEL_V1 — seed phase panel
+    _phaseState.phases    = st.phases || [];
+    _phaseState.startedAt = st.started_at || 0;
+    _phaseState.active    = !!st.active;
+    _renderPhasePanel();
     if (st.result) {
       if (st.result.event === 'render_done' && st.result.data.filename) {
         showOutput(st.result.data.filename);
+        loadPlanForMashup(st.result.data.filename);
       } else if (st.result.event === 'error_event') {
         document.getElementById('statusText').textContent = st.result.data.text || 'Error';
       }
@@ -366,6 +564,7 @@ evtSource.addEventListener('render_done', e => {
   const d = JSON.parse(e.data);
   showOutput(d.filename);
   document.getElementById('btnQuickGen').disabled = false;
+  loadPlanForMashup(d.filename);
 });
 evtSource.addEventListener('audio_done', e => {
   const d = JSON.parse(e.data);
@@ -626,16 +825,194 @@ async function doDownload() {
   });
 }
 
+
+// ── Person dropdown (group -> member) ──
+window.QG_GROUPS = {
+  "Fromis_9":   ["HaYoung"],
+  "IVE":        ["WonYoung", "AnYuJin", "Leeseo", "Liz"],
+  "Babymonster":["Ahyeon"],
+  "IU":         ["IU"],
+  "QWER":       ["Chodan"],
+  "Illit":      ["WonHee"],
+  "H2H":        ["Ian", "Jiwoo"],
+  "aespa":      ["Karina", "Winter"],
+  "ITZY":       ["Yuna"]
+};
+
+function populateGroupDropdown() {
+  const gs = document.getElementById('qgGroup');
+  if (!gs || gs._filled) return;
+  const names = Object.keys(window.QG_GROUPS).sort((a,b) => a.localeCompare(b));
+  for (const g of names) {
+    const opt = document.createElement('option');
+    opt.value = g; opt.textContent = g;
+    gs.appendChild(opt);
+  }
+  gs._filled = true;
+}
+
+async function onGroupChange() {
+  const g = document.getElementById('qgGroup').value;
+  // also refresh song dropdown for this group
+  populateSongDropdown(g);
+  const ms = document.getElementById('qgMember');
+  ms.innerHTML = '<option value="" disabled selected>' +
+                 (currentLang === 'zh' ? '選擇成員' : 'Pick member') + '</option>';
+  const members = window.QG_GROUPS[g] || [];
+  for (const m of members) {
+    const opt = document.createElement('option');
+    opt.value = m; opt.textContent = m;
+    ms.appendChild(opt);
+  }
+  ms.disabled = members.length === 0;
+  ms.onchange = () => {
+    document.getElementById('qgPerson').value = ms.value || '';
+  };
+  document.getElementById('qgPerson').value = '';
+  // If group has a single member (solo or 1-only), auto-pick it.
+  if (members.length === 1) {
+    ms.value = members[0];
+    document.getElementById('qgPerson').value = members[0];
+  }
+}
+
+
+async function populateSongDropdown(group) {
+  const sel = document.getElementById('qgSong');
+  if (!sel) return;
+  sel.innerHTML = '<option value="" disabled selected>' +
+    (currentLang==='zh' ? '載入中...' : 'Loading...') + '</option>';
+  sel.disabled = true;
+  if (!group) {
+    sel.innerHTML = '<option value="" disabled selected>' +
+      (currentLang==='zh' ? '先選團體' : 'Pick group first') + '</option>';
+    return;
+  }
+  let data = null;
+  try {
+    const r = await fetch('/api/songs?group=' + encodeURIComponent(group));
+    if (r.ok) { const d = await r.json(); data = d.data || null; }
+  } catch(e) { console.warn('songs fetch failed', e); }
+  sel.innerHTML = '';
+  const ph = document.createElement('option');
+  ph.value = ''; ph.disabled = true; ph.selected = true;
+  ph.textContent = (currentLang==='zh' ? '選擇曲目' : 'Pick song');
+  sel.appendChild(ph);
+
+  const seen = new Set();
+  const addBucket = (label, releases) => {
+    if (!releases || !releases.length) return;
+    for (const rel of releases) {
+      const og = document.createElement('optgroup');
+      const y = rel.year ? ` (${rel.year})` : '';
+      og.label = `${label} · ${rel.name}${y}`;
+      for (const t of (rel.tracks || [])) {
+        const key = (t || '').toLowerCase().trim();
+        if (!key || seen.has(key)) continue;
+        seen.add(key);
+        const o = document.createElement('option');
+        o.value = t; o.textContent = t;
+        og.appendChild(o);
+      }
+      if (og.children.length) sel.appendChild(og);
+    }
+  };
+  const labels = currentLang === 'zh'
+    ? { albums: '正規專輯', mini_albums: '迷你專輯', singles: '單曲' }
+    : { albums: 'Studio Album', mini_albums: 'Mini Album', singles: 'Single' };
+  if (data) {
+    addBucket(labels.albums,      data.albums);
+    addBucket(labels.mini_albums, data.mini_albums);
+    addBucket(labels.singles,     data.singles);
+  }
+  // always add custom option at end
+  const custom = document.createElement('option');
+  custom.value = '__custom__';
+  custom.textContent = currentLang==='zh' ? '▸ 自訂輸入...' : '▸ Custom title...';
+  sel.appendChild(custom);
+  sel.disabled = false;
+
+  sel.onchange = () => {
+    const custIn = document.getElementById('qgSongCustom');
+    if (sel.value === '__custom__') {
+      if (custIn) { custIn.style.display = ''; custIn.focus(); }
+    } else if (custIn) {
+      custIn.style.display = 'none';
+    }
+  };
+}
+
+// Returns the effective song string: custom input if selected, else dropdown value.
+async function refreshSongLibrary() {
+  const btn = document.getElementById('btnRefreshSongs');
+  if (!btn) return;
+  const orig = btn.innerHTML;
+  btn.disabled = true;
+  btn.innerHTML = currentLang==='zh' ? '⏳ 抓取中...' : '⏳ Fetching...';
+  try {
+    const r = await fetch('/api/songs/refresh', { method: 'POST' });
+    const d = await r.json();
+    if (!r.ok || d.error) {
+      alert((currentLang==='zh' ? '更新失敗: ' : 'Refresh failed: ') + (d.error || r.status));
+      return;
+    }
+    // Re-populate for the currently-selected group
+    const g = document.getElementById('qgGroup').value;
+    if (g) await populateSongDropdown(g);
+    btn.innerHTML = currentLang==='zh' ? '✓ 已更新' : '✓ Updated';
+    setTimeout(() => { btn.innerHTML = orig; btn.disabled = false; }, 1500);
+    return;
+  } catch(e) {
+    alert((currentLang==='zh' ? '更新錯誤: ' : 'Refresh error: ') + e);
+  }
+  btn.innerHTML = orig;
+  btn.disabled = false;
+}
+
+function qgSongValue() {
+  const sel = document.getElementById('qgSong');
+  const custIn = document.getElementById('qgSongCustom');
+  if (sel && sel.value === '__custom__' && custIn) return (custIn.value || '').trim();
+  return sel ? (sel.value || '').trim() : '';
+}
+
+populateGroupDropdown();
+
+// Replace QG_GROUPS with live data from face_library/index.json.
+async function fetchDynamicGroups() {
+  try {
+    const r = await fetch('/api/groups');
+    if (!r.ok) return;
+    const d = await r.json();
+    const g = d.groups || {};
+    if (Object.keys(g).length === 0) return;
+    window.QG_GROUPS = g;
+    // Rebuild the group dropdown
+    const gs = document.getElementById('qgGroup');
+    if (!gs) return;
+    gs._filled = false;
+    // Keep placeholder, clear the rest
+    const placeholder = gs.querySelector('option[value=""]');
+    gs.innerHTML = '';
+    if (placeholder) gs.appendChild(placeholder);
+    populateGroupDropdown();
+  } catch(e) { console.warn('fetchDynamicGroups failed', e); }
+}
+fetchDynamicGroups();
+
 // ── Quick Generate ──
 async function quickGenerate() {
   const person = document.getElementById('qgPerson').value.trim();
-  const song = document.getElementById('qgSong').value.trim();
+  const song = qgSongValue();
   if (!person || !song) {
     alert(currentLang === 'zh' ? '請輸入人物名稱和曲目名稱' : 'Please enter person name and song title');
     return;
   }
   document.getElementById('btnQuickGen').disabled = true;
   document.getElementById('statusText').textContent = t('generating');
+  // PHASE_PANEL_V1 — reset local timer (server authoritative via first phase event)
+  _phaseState = { phases: [], startedAt: Date.now()/1000, active: true };
+  _renderPhasePanel();
 
   // Also fill in the face name and song fields
   document.getElementById('faceName').value = person;
@@ -723,6 +1100,12 @@ async function runRender() {
 }
 
 // ── Timeline ──
+window.currentPlan = null;
+window.currentMashup = null;
+window.pendingSwap = null;  // legacy, retained for compat
+window.pendingSwaps = {};  // BATCH_PREVIEW_V1 {seg_idx: video_idx}
+window.timelineColors = ['#e57373','#64b5f6','#81c784','#ffd54f','#ba68c8','#4db6ac','#ffb74d','#9575cd'];
+
 async function refreshTimeline() {
   const r = await fetch('/api/segments');
   const d = await r.json();
@@ -733,16 +1116,306 @@ async function refreshTimeline() {
     label.textContent = '';
     return;
   }
-  const total = d.total_duration;
-  bar.innerHTML = d.segments.map(s => {
-    const pct = ((s.end - s.start) / total * 100).toFixed(2);
-    const col = d.colors[s.video_idx] || '#666';
-    return `<div class="timeline-seg" style="width:${pct}%;background:${col}"
-                 title="V${s.video_idx+1} ${s.start.toFixed(1)}-${s.end.toFixed(1)}s sim=${s.similarity.toFixed(2)}">
-              ${pct > 3 ? 'V' + (s.video_idx+1) : ''}
+  renderTimelineFromSegments(d.segments, d.total_duration, d.colors, /*fromPlan*/false);
+  label.textContent = `${d.segments.length} ${currentLang === 'zh' ? '段' : 'segments'}, ${d.total_duration.toFixed(1)}s`;
+}
+
+function renderTimelineFromSegments(segs, total, colors, fromPlan) {
+  const bar = document.getElementById('timeline');
+  bar.innerHTML = segs.map((s, i) => {
+    const start = fromPlan ? s.t_start : s.start;
+    const end   = fromPlan ? s.t_end   : s.end;
+    const vi    = s.video_idx;
+    const sim   = s.similarity || 0;
+    const pct   = ((end - start) / total * 100).toFixed(2);
+    const col   = (colors && colors[vi]) || window.timelineColors[vi % window.timelineColors.length];
+    return `<div class="timeline-seg" data-seg-idx="${i}" data-vi="${vi}"
+                 style="width:${pct}%;background:${col}"
+                 title="#${i} V${vi+1} ${start.toFixed(1)}-${end.toFixed(1)}s sim=${sim.toFixed(2)}"
+                 onclick="openSwapPanel(${i})">
+              ${pct > 3 ? 'V' + (vi+1) : ''}
             </div>`;
   }).join('');
-  label.textContent = `${d.segments.length} ${currentLang === 'zh' ? '段' : 'segments'}, ${total.toFixed(1)}s`;
+}
+
+async function loadPlanForMashup(filename) {
+  window.currentMashup = filename;
+  window.currentPlan = null;
+  try {
+    const r = await fetch('/api/plan/' + encodeURIComponent(filename));
+    if (!r.ok) return;
+    const plan = await r.json();
+    window.currentPlan = plan;
+    // Compute total from max t_end
+    let total = plan.duration || 0;
+    if (!total && plan.segments.length) total = plan.segments[plan.segments.length-1].t_end;
+    renderTimelineFromSegments(plan.segments, total, null, true);
+    const label = document.getElementById('tlLabel');
+    label.textContent = `${plan.segments.length} ${currentLang === 'zh' ? '段' : 'segments'}, ${total.toFixed(1)}s ` +
+                        `${currentLang === 'zh' ? '(點段落換片)' : '(click segment to swap)'}`;
+    wireTimelinePlayback();
+    // Always-on panel: open for segment 0 as starting state.
+    _buildSwapPanel(0);
+  } catch(e) { console.warn('plan load failed', e); }
+}
+
+function wireTimelinePlayback() {
+  const video = document.getElementById('outputVideo');
+  if (!video || video._wired) return;
+  video._wired = true;
+  const _advance = () => {
+    if (!window.currentPlan) return;
+    const t = video.currentTime;
+    const segs = window.currentPlan.segments;
+    let idx = segs.findIndex(s => t >= s.t_start && t < s.t_end);
+    if (idx < 0) idx = segs.length - 1;
+    document.querySelectorAll('.timeline-seg').forEach(el => {
+      el.classList.toggle('active', parseInt(el.dataset.segIdx) === idx);
+    });
+    if (idx !== window.currentPanelSegIdx) {
+      _buildSwapPanel(idx);
+    }
+  };
+  video.addEventListener('timeupdate', _advance);
+  video.addEventListener('seeked', _advance);
+  video.addEventListener('loadedmetadata', _advance);
+}
+
+function visibilityHeatmap(vis, t0, t1, sim_thresh) {
+  // vis: array of [t, sim]. Render ~20 cells over [t0, t1].
+  if (!vis || !vis.length) return '<div class="heatmap"><div class="cell" style="background:#333"></div></div>';
+  const N = 20;
+  const cells = [];
+  for (let i = 0; i < N; i++) {
+    const ct = t0 + (t1 - t0) * (i + 0.5) / N;
+    let best = 0;
+    for (const [st, s] of vis) {
+      if (Math.abs(st - ct) <= 0.8 && s > best) best = s;
+    }
+    // Map sim to color: <0.3 dark, >=0.5 bright green
+    let bg = '#333';
+    if (best >= 0.55) bg = '#2e7d32';
+    else if (best >= 0.45) bg = '#66bb6a';
+    else if (best >= 0.35) bg = '#a5d6a7';
+    else if (best >= 0.25) bg = '#555';
+    cells.push(`<div class="cell" style="background:${bg}" title="t=${ct.toFixed(1)}s sim=${best.toFixed(2)}"></div>`);
+  }
+  return `<div class="heatmap">${cells.join('')}</div>`;
+}
+
+// STICKY_SWAP_PANEL_V1
+function openSwapPanel(segIdx) {
+  // Click from timeline: seek and rebuild panel for that segment.
+  const plan = window.currentPlan;
+  if (!plan) { alert(currentLang==='zh'?'此成品無 plan.json,請重跑':'No plan for this mashup'); return; }
+  const seg = plan.segments[segIdx];
+  if (!seg) return;
+  const vid = document.getElementById('outputVideo');
+  if (vid && !isNaN(vid.duration)) { vid.currentTime = seg.t_start; }
+  _buildSwapPanel(segIdx);
+}
+
+function _buildSwapPanel(segIdx) {
+  const plan = window.currentPlan;
+  if (!plan) return;
+  const seg = plan.segments[segIdx];
+  if (!seg) return;
+
+  // The selected candidate for this seg = queued override if any, else current.
+  const queuedVi = (window.pendingSwaps || {})[segIdx];
+  const selVi = (queuedVi != null) ? queuedVi : seg.video_idx;
+  window.pendingSwap = { seg_idx: segIdx, video_idx: selVi };  // legacy mirror
+  window.currentPanelSegIdx = segIdx;
+
+  document.getElementById('swapTitle').textContent =
+    `#${segIdx} — V${seg.video_idx+1}`;
+  document.getElementById('swapSub').textContent =
+    `${seg.t_start.toFixed(1)}s - ${seg.t_end.toFixed(1)}s ` +
+    `(sim=${(seg.similarity||0).toFixed(2)})`;
+
+  // Build candidate rows: include current + candidates + any missing videos
+  const seen = new Set();
+  const rows = [];
+  const curCand = { video_idx: seg.video_idx, score: seg.similarity || 0 };
+  [curCand, ...(seg.candidates || [])].forEach(c => {
+    if (!seen.has(c.video_idx)) { seen.add(c.video_idx); rows.push(c); }
+  });
+  plan.videos.forEach(v => {
+    if (!seen.has(v.idx)) { seen.add(v.idx); rows.push({ video_idx: v.idx, score: 0 }); }
+  });
+
+  const cont = document.getElementById('swapCands');
+  const audioOff = plan.audio_offsets || {};
+  cont.innerHTML = rows.map(c => {
+    const vi = c.video_idx;
+    const v  = plan.videos.find(x => x.idx === vi);
+    const vname = v ? (v.filename || ('V'+(vi+1))).slice(0, 28) : ('V'+(vi+1));
+    const off = parseFloat(audioOff[String(vi)] || 0);
+    const t0 = seg.t_start + off, t1 = seg.t_end + off;
+    const vis = (plan.face_visibility || {})[String(vi)] || [];
+    const isCur = vi === seg.video_idx;
+    const col = window.timelineColors[vi % window.timelineColors.length];
+    const isQueued = (window.pendingSwaps || {})[segIdx] === vi;
+    const isSel    = (vi === selVi);
+    return `<div class="swap-cand ${isCur?'current':''} ${isSel?'selected':''} ${isQueued?'queued':''}"
+                 data-vi="${vi}" onclick="selectSwapCand(${vi})">
+      <div class="row1">
+        <span class="vname"><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:${col};margin-right:6px;vertical-align:middle"></span>V${vi+1} · ${vname}${isCur?' ★':''}</span>
+        <span class="score">${c.score>0 ? 'score='+c.score.toFixed(2) : ''}</span>
+      </div>
+      ${visibilityHeatmap(vis, t0, t1)}
+    </div>`;
+  }).join('');
+
+  document.getElementById('swapPanel').classList.add('show');
+  // Highlight segments on timeline: active for current, queued for pending.
+  refreshTimelineQueueMarks();
+  document.querySelectorAll('.timeline-seg').forEach(el => {
+    el.classList.toggle('active', parseInt(el.dataset.segIdx) === segIdx);
+  });
+  updateApplyAllButton();
+  // Start preview of the selected candidate for this segment.
+  playCandidatePreview(selVi, segIdx);
+}
+
+function selectSwapCand(vi) {
+  const plan = window.currentPlan;
+  const segIdx = window.currentPanelSegIdx;
+  if (!plan || segIdx == null) return;
+  const seg = plan.segments[segIdx];
+  if (!seg) return;
+
+  // Queue / unqueue: if vi matches the plan's current, drop the override.
+  window.pendingSwaps = window.pendingSwaps || {};
+  if (vi === seg.video_idx) {
+    delete window.pendingSwaps[segIdx];
+  } else {
+    window.pendingSwaps[segIdx] = vi;
+  }
+  if (window.pendingSwap) window.pendingSwap.video_idx = vi;
+
+  // Update candidate row classes (.selected on picked, .queued on overrides).
+  document.querySelectorAll('.swap-cand').forEach(el => {
+    const v = parseInt(el.dataset.vi);
+    el.classList.toggle('selected', v === vi);
+    el.classList.toggle('queued', window.pendingSwaps[segIdx] === v);
+  });
+
+  // Pause output video so time doesn't advance past this segment.
+  const outv = document.getElementById('outputVideo');
+  if (outv && !outv.paused) { try { outv.pause(); } catch(e) {} }
+
+  refreshTimelineQueueMarks();
+  updateApplyAllButton();
+  playCandidatePreview(vi, segIdx);
+}
+
+function closeSwapPanel() {
+  // Reset just this segment's queued swap (doesn't touch others in queue).
+  const si = window.currentPanelSegIdx;
+  if (si != null && window.pendingSwaps) {
+    delete window.pendingSwaps[si];
+    _buildSwapPanel(si);
+  }
+  if (!window.currentPlan) {
+    document.getElementById('swapPanel').classList.remove('show');
+  }
+}
+
+function refreshTimelineQueueMarks() {
+  const q = window.pendingSwaps || {};
+  document.querySelectorAll('.timeline-seg').forEach(el => {
+    el.classList.toggle('queued', q[parseInt(el.dataset.segIdx)] != null);
+  });
+}
+
+function updateApplyAllButton() {
+  const btn = document.getElementById('swapApplyAllBtn');
+  if (!btn) return;
+  const q = window.pendingSwaps || {};
+  const n = Object.keys(q).length;
+  const label = currentLang==='zh' ? `\u5168\u90e8\u5957\u7528 (${n})` : `Apply All (${n})`;
+  btn.textContent = label;
+  btn.disabled = (n === 0);
+}
+
+function clearSwapQueue() {
+  window.pendingSwaps = {};
+  refreshTimelineQueueMarks();
+  updateApplyAllButton();
+  if (window.currentPanelSegIdx != null) _buildSwapPanel(window.currentPanelSegIdx);
+}
+
+async function applyAllSwaps() {
+  if (!window.currentMashup) return;
+  const q = window.pendingSwaps || {};
+  const swaps = Object.entries(q).map(([seg_idx, video_idx]) => ({
+    seg_idx: parseInt(seg_idx), video_idx: parseInt(video_idx),
+  }));
+  if (!swaps.length) return;
+
+  const btn = document.getElementById('swapApplyAllBtn');
+  btn.disabled = true;
+  const orig = btn.textContent;
+  btn.textContent = currentLang==='zh' ? '\u91cd\u65b0\u5408\u6210\u4e2d...' : 'Rendering...';
+  try {
+    const r = await fetch('/api/swap_segment', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ mashup: window.currentMashup, swaps: swaps }),
+    });
+    const d = await r.json();
+    if (!r.ok) { alert('Swap failed: ' + (d.error || r.statusText)); btn.textContent = orig; btn.disabled = false; return; }
+    document.getElementById('statusText').textContent =
+      (currentLang==='zh' ? `\u63db\u7247\u91cd\u65b0\u5408\u6210\u4e2d (${swaps.length} \u6bb5): ` : `Swap rendering (${swaps.length} segs): `) + d.filename;
+    // Clear local queue; render_done event will load the new plan.
+    window.pendingSwaps = {};
+    refreshTimelineQueueMarks();
+  } catch(e) {
+    alert('Swap request failed: ' + e);
+    btn.textContent = orig;
+    btn.disabled = false;
+  }
+}
+
+// --- Candidate preview ---
+let _previewStopT = -1;
+function playCandidatePreview(vi, segIdx) {
+  const plan = window.currentPlan;
+  const prev = document.getElementById('swapPreview');
+  if (!plan || !prev) return;
+  const seg = plan.segments[segIdx];
+  const v = plan.videos && plan.videos.find(x => x.idx === vi);
+  if (!seg || !v || !v.filename) { prev.classList.remove('show'); prev.removeAttribute('src'); return; }
+
+  const off = parseFloat((plan.audio_offsets || {})[String(vi)] || 0);
+  const t0 = Math.max(0, seg.t_start + off);
+  const t1 = seg.t_end + off;
+
+  const wantSrc = '/downloads/' + encodeURIComponent(v.filename);
+  if (prev.getAttribute('src') !== wantSrc) {
+    prev.src = wantSrc;
+    prev.load();
+  }
+  prev.classList.add('show');
+  _previewStopT = t1;
+
+  const seekAndPlay = () => {
+    try { prev.currentTime = t0; } catch(e) {}
+    prev.play().catch(()=>{});
+  };
+  if (prev.readyState >= 1) seekAndPlay();
+  else prev.addEventListener('loadedmetadata', seekAndPlay, { once: true });
+
+  // Stop at segment end (handler already bound on first call).
+  if (!prev._stopBound) {
+    prev.addEventListener('timeupdate', () => {
+      if (_previewStopT > 0 && prev.currentTime >= _previewStopT) {
+        try { prev.pause(); } catch(e) {}
+      }
+    });
+    prev._stopBound = true;
+  }
 }
 
 // ── Output ──
@@ -755,8 +1428,78 @@ function showOutput(filename) {
   dl.href = url;
   dl.download = filename;
   preview.style.display = 'block';
+  refreshTiktokClips(filename);
   video.scrollIntoView({ behavior: 'smooth' });
 }
+
+
+// TIKTOK_CLIPS_UI_V1 — list sliced clips next to the main output.
+async function refreshTiktokClips(filename) {
+  const host = document.getElementById('tiktokClips');
+  if (!host || !filename) return;
+  try {
+    const r = await fetch('/api/tiktok_clips/' + encodeURIComponent(filename));
+    const j = await r.json();
+    const clips = j.clips || [];
+    if (!clips.length) { host.innerHTML = ''; return; }
+    host.innerHTML =
+      '<div style="font-weight:600;margin-bottom:4px">TikTok 切片 (' + clips.length + ')</div>' +
+      clips.map(c =>
+        '<a class="btn" style="margin:2px 4px 2px 0" href="' + c.url +
+        '" download="' + (c.download_as || c.name) + '">' +
+        '#' + String(c.idx).padStart(2,'0') + ' · ' + c.seconds + 's · ' +
+        c.size_mb + ' MB</a>'
+      ).join('');
+  } catch (e) { /* ignore */ }
+}
+evtSource.addEventListener('tiktok_done', e => {
+  try {
+    const d = JSON.parse(e.data);
+    refreshTiktokClips(d.filename);
+  } catch (_) {}
+});
+
+
+// TASK_CANCEL_V1 — 暫停/中止 button
+async function cancelTask() {
+  const btn = document.getElementById('btnCancel');
+  if (btn) { btn.disabled = true; btn.textContent = '中止中...'; }
+  try {
+    await fetch('/api/cancel', { method: 'POST' });
+  } catch (_) {}
+  document.getElementById('statusText').textContent = '已中止';
+  setTimeout(() => {
+    if (btn) { btn.style.display = 'none'; btn.disabled = false; btn.textContent = '暫停'; }
+  }, 600);
+}
+function _setTaskActiveUI(active) {
+  const btn = document.getElementById('btnCancel');
+  if (btn) btn.style.display = active ? 'inline-block' : 'none';
+  const gen = document.getElementById('btnQuickGen');
+  if (gen) gen.disabled = !!active;
+  // PHASE_PANEL_V1 — stop the tick when task ends, keep panel visible as history
+  _phaseState.active = !!active;
+  _renderPhasePanel();
+}
+// Initial sync + whenever progress / done events fire
+(async () => {
+  try {
+    const st = await (await fetch('/api/task_status')).json();
+    _setTaskActiveUI(!!st.active);
+  } catch (_) {}
+})();
+evtSource.addEventListener('progress', () => {
+  // a progress tick implies active — but only show if value < 1
+  try {
+    // best-effort: stay active if status text isn't final
+    const txt = document.getElementById('statusText').textContent || '';
+    const done = /完成|已中止|failed|error/i.test(txt);
+    _setTaskActiveUI(!done);
+  } catch (_) {}
+});
+evtSource.addEventListener('render_done',  () => _setTaskActiveUI(false));
+evtSource.addEventListener('error_event',  () => _setTaskActiveUI(false));
+evtSource.addEventListener('tiktok_done',  () => _setTaskActiveUI(false));
 
 // ── Init ──
 refreshVideos();
